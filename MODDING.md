@@ -357,6 +357,7 @@ Two host keys, for game modes (both read every tick, so set or clear them whenev
 | `inventory.block.<player>` (bool, synced) | The inventory is **off** for that player: no inventory screen, hotbar or gold on their screen, no picking up, no punch, no store, no consumables, and worn clothing has no effect (no armour, mobility or noise; the character shows its own look). The inventory leaves their tool wheel alone. Everything they carry, wear and own in gold is **kept** (not dropped, not even at death) and comes back when the key is false or cleared. A missing key means not blocked. |
 | `inventory.keepondeath` (bool) | Nobody loses anything at death: items, worn clothing and gold all stay with the player (no drop, no gold share). Missing: the usual death drop. |
 | `inventory.consumables` = false | No consumables: using one shows "Not in this game mode" and keeps the item; running speed boosts end. Missing or true: allowed. |
+| `inventory.healing` = false | No healing: a consumable that heals shows "No healing in this game mode" and is kept; other consumables (speed boosts) work. Missing or true: allowed. |
 | `inventory.keeptools = "id id ..."` | Tool ids the inventory **never touches**: they are not items, and it never enables, disables or puts them away. Your mode hands them out (`SetToolEnabled`, `SetToolAmmo`) and takes them back itself, for everyone. |
 
 ```lua

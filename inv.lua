@@ -37,6 +37,8 @@
 --   inventory.free = true                                (host) the store asks no money
 --   inventory.consumables = false                       (host) a game mode's: consumables can't be used (a note, the
 --                                                        item kept) and running speed boosts end; unset or true: allowed
+--   inventory.healing = false                           (host) a game mode's: consumables that heal can't be used (a
+--                                                        note, the item kept); the others can (Brawl)
 --   inventory.items.<id>.heal = 0..1                    a consumable: using it (its hotkey) gives that much health
 --   inventory.used.last / .<n % 16>.player / .id        a consumable was used (fields first, the counter last)
 --   inventory.price.<id> = n                            the store's price of an item (-1: not sold); unset: a default
@@ -966,6 +968,10 @@ local function doUse(p, ref)
 	local def = it and C.defs[it.id]
 	if not def or def.kind ~= "consumable" then return end
 	if invConsumablesOff() then note(p, "Not in this game mode") return end   -- (kept, not used up)
+	if def.heal and def.heal > 0 and HasKey("inventory.healing") and not GetBool("inventory.healing") then
+		note(p, "No healing in this game mode")                      -- (inventory.healing = false: Brawl - the user: other
+		return                                                       --  consumables are fine there)
+	end
 	C.take(invs[p], ref, 1)
 	dirty = true
 	if def.heal and def.heal > 0 then SetPlayerHealth(math.min(1, GetPlayerHealth(p) + def.heal), p) end
