@@ -264,6 +264,30 @@ function C.take(inv, ref, n)
 	return {id = it.id, n = n}
 end
 
+-- Take n (nil: all) of an item id out from wherever it lies (grid cells, then what is worn): how many went. For game
+-- modes taking back what they gave (inventory.take); nothing is dropped.
+function C.takeId(inv, id, n)
+	local left = n or math.huge
+	local took = 0
+	for i = 1, C.GRID do
+		local it = inv.g[i]
+		if left > 0 and it and it.id == id then
+			local k = math.min(left, it.n or 1)
+			if k >= (it.n or 1) then inv.g[i] = nil else it.n = it.n - k end
+			left, took = left - k, took + k
+		end
+	end
+	for s = 1, #C.SLOTS do
+		local it = inv.e[C.SLOTS[s]]
+		if left > 0 and it and it.id == id then
+			inv.e[C.SLOTS[s]] = nil
+			left, took = left - 1, took + 1
+		end
+	end
+	if took > 0 then C.fix(inv) end
+	return took
+end
+
 -- Everything out (death): the list of instances; the inventory is empty after.
 function C.takeAll(inv)
 	local out = {}

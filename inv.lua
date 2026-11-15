@@ -3,6 +3,9 @@
 -- (ServerCall), the host moves, shared.inv shows the result.
 --
 -- For other mods (host registry; mods cannot call each other):
+--   inventory.take.<player> = "id[:n] id ..."           take items back (n: how many, none: all of them; from the
+--                                                        grid, the hotkeys and what is worn; missing ones ignored;
+--                                                        nothing dropped; read and cleared each tick, host)
 --   inventory.give.<player> = "id[:n[:ammo]] id ..."   hand items out (append to the string; read and cleared each
 --                                                       tick; what does not fit lands at the player's feet)
 --   inventory.items.<id>.name / .kind (tool | clothing | consumable | misc) / .stack / .slot / .armor / .icon
@@ -32,6 +35,8 @@
 --                                                        back each time, never keep a copy. Every player starts
 --                                                        with INV_GOLD_START
 --   inventory.free = true                                (host) the store asks no money
+--   inventory.consumables = false                       (host) a game mode's: consumables can't be used (a note, the
+--                                                        item kept) and running speed boosts end; unset or true: allowed
 --   inventory.items.<id>.heal = 0..1                    a consumable: using it (its hotkey) gives that much health
 --   inventory.used.last / .<n % 16>.player / .id        a consumable was used (fields first, the counter last)
 --   inventory.price.<id> = n                            the store's price of an item (-1: not sold); unset: a default
@@ -569,6 +574,8 @@ local function giveList(p, list)
 			n = tonumber(n) or 1
 			if def.takes then                                        -- (a gun: "gun:1:12" = 12 rounds loaded)
 				ammo = tonumber(ammo)
+			elseif def.kind == "tool" then                           -- (a tool: the count given, else one pack, else
+				ammo = tonumber(ammo) or def.pack                    --  none needed; HvC's gun without the Guns Pack)
 			else
 				ammo = def.pack and (tonumber(ammo) or def.pack) or nil  -- (no ammo given: one pack)
 			end
@@ -768,8 +775,13 @@ local stats = {}         -- player -> the "defense mobility noise" last written
 local extras = {}        -- player -> the "defense mobility noise" of non-clothing-pack pieces last told to the engine
 local wasBlocked = {}     -- player -> inventory.block as last seen
 local boostEnd, boostOf, boostShown = {}, {}, {}   -- BlueTide: player -> when it ends (GetTime), its share, the HUD's seconds
+-- inventory.consumables = false (host): a game mode allows none - not used (a note), running boosts end (Brawl)
+function invConsumablesOff()
+	return HasKey("inventory.consumables") and not GetBool("inventory.consumables")
+end
 local function publishStats(p, v)
 	local own = C.stats(v, true)
+	if invConsumablesOff() then boostEnd[p] = nil end
 	local boost, left = 0, (boostEnd[p] or 0) - GetTime()               -- BlueTide: extra mobility while it lasts
 	if left > 0 and GetPlayerHealth(p) > 0 then
 		boost = (boostOf[p] or 0) * math.min(1, left / INV_BOOST_FADE)
@@ -844,8 +856,10 @@ local KIND_ORDER = {tool = 1, ammo = 1.5, clothing = 2, consumable = 3, misc = 4
 local function publishStock()
 	local list = {}
 	if storeOn() then
-		for id in pairs(C.defs) do
-			local price = priceOf(id)
+		for id, def in pairs(C.defs) do
+			-- (a tool a game mode keeps for itself is not sold: Humans vs Clickers' gun and plank, made items before the
+			--  mode wrote inventory.keeptools, were offered with no picture under Items - the user, 2026-11-15)
+			local price = (def.kind == "tool" and invKeptTool(id)) and -1 or priceOf(id)
 			if price >= 0 then list[#list + 1] = {id = id, price = price} end
 		end
 	end
@@ -951,6 +965,7 @@ local function doUse(p, ref)
 	local it = C.get(invs[p], ref)
 	local def = it and C.defs[it.id]
 	if not def or def.kind ~= "consumable" then return end
+	if invConsumablesOff() then note(p, "Not in this game mode") return end   -- (kept, not used up)
 	C.take(invs[p], ref, 1)
 	dirty = true
 	if def.heal and def.heal > 0 then SetPlayerHealth(math.min(1, GetPlayerHealth(p) + def.heal), p) end
@@ -1314,6 +1329,17 @@ function Inv.serverTick(dt)
 			local list = GetString("inventory.give." .. p)
 			ClearKey("inventory.give." .. p)
 			giveList(p, list)
+		end
+		if HasKey("inventory.take." .. p) and InvKeep.claimed(p) then     -- a game mode takes back what it gave
+			local list = GetString("inventory.take." .. p)                --  (after their kept inventory came back)
+			ClearKey("inventory.take." .. p)
+			for word in string.gmatch(list, "%S+") do
+				local id, n = string.match(word, "^([^:]+):?(%d*)$")
+				if id and C.takeId(v, id, tonumber(n)) > 0 then
+					if live[p] then live[p][id] = nil end
+					dirty = true
+				end
+			end
 		end
 		if HasKey("inventory.goldadd." .. p) and InvKeep.claimed(p) then   -- (after their saved gold came back)
 			local list = GetString("inventory.goldadd." .. p)
@@ -2550,9 +2576,11 @@ local function invDrawMain()
 		-- three categories (the user, 2026-11-15): weapons and tools / clothing / items, each with its own pages
 		local shown, counts = {}, {0, 0, 0}
 		for _, e in ipairs(storeList) do
-			local c = invStoreCat(e.id)
-			counts[c] = counts[c] + 1
-			if c == storeCat then shown[#shown + 1] = e end
+			if C.defs[e.id] then                                     -- (one this machine doesn't know: not shown, not bought)
+				local c = invStoreCat(e.id)
+				counts[c] = counts[c] + 1
+				if c == storeCat then shown[#shown + 1] = e end
+			end
 		end
 		local cx = sx
 		for c = 1, #STORE_CATS do
