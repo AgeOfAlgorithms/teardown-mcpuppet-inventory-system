@@ -1,0 +1,5 @@
+name = Example Pack
+author = AgeOfAlgorithms and Claude
+description = A small example of adding things to the McPuppet Inventory System: a bandage, a gold bar, a crowbar, a T-shirt, a cap and a frying pan. Copy it and make it yours.
+tags = Gameplay
+version = 2

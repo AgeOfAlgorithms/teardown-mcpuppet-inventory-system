@@ -1,0 +1,28 @@
+<prefab version="1.6.0">
+	<!-- A melee weapon's tool prefab for the McPuppet Inventory System. Tool space: the origin is the RIGHT HAND on the grip, +y runs up the
+	     weapon. Change for your own weapon: the vox file, the vox pos y, the "tip" location - nothing else.
+	     Keep the eye_space poses as they are: the swings start from them. -->
+	<group name="instance=MOD/prefab/pan.xml" pos="0 0 0" rot="0.0 0.0 0.0">
+		<group name="eye_space">
+			<location name="fp_action" tags="name=fp_action" pos="0.32 -0.46 -0.52" rot="-26 0 -6"/>
+			<location name="tp_action" tags="name=tp_action" pos="0.22 -0.50 -0.30" rot="-25 0 8"/>
+			<location name="tp_action_crouch" tags="name=tp_action_crouch" pos="0.28 -0.58 -0.28" rot="-25 0 8"/>
+			<location name="tp_run" tags="name=tp_run" pos="0.24 -0.72 -0.12" rot="-70 0 0"/>
+			<location name="tp_jump" tags="name=tp_jump" pos="0.24 -0.62 -0.2" rot="-40 0 0"/>
+			<location name="tp_crouch" tags="name=tp_crouch" pos="0.28 -0.72 -0.12" rot="-60 0 0"/>
+		</group>
+		<group name="tool_space">
+			<body dynamic="false">
+				<!-- the model (0.05 m voxels, modelled standing up). A tool's model sits round the CENTRE cell of its
+				     grid, so: pos y = (grid height / 2, rounded down - voxels from the bottom to the hand) x 0.05.
+				     This pan: 13 high, the hand 2 voxels up: (6 - 2) x 0.05 = 0.2 -->
+				<vox file="MOD/vox/pan.vox" scale="0.5" pos="-0.025 0.200 0.025" rot="0 0 0"/>
+			</body>
+			<location name="tp_action_rh" tags="name=tp_action_rh ik_hand" pos="0.0 0.0 0.0" rot="0.0 90.0 0.0"/>
+			<location name="tp_run_rh" tags="name=tp_run_rh ik_hand" pos="0.0 0.0 0.0" rot="0.0 90.0 0.0"/>
+			<location name="tp_crouch_rh" tags="name=tp_crouch_rh ik_hand" pos="0.0 0.0 0.0" rot="0.0 90.0 0.0"/>
+			<!-- the far end of the weapon: y = (grid height - voxels to the hand) x 0.05 = the "length" in weapons.lua -->
+			<location name="tip" tags="name=tip" pos="0.0 0.550 0.0"/>
+		</group>
+	</group>
+</prefab>
