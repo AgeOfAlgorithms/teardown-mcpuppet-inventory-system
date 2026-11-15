@@ -301,7 +301,7 @@ What the fields mean to the player:
 | Field | Meaning |
 |---|---|
 | `slot` | Where it is worn: `"head"`, `"top"` (upper body), `"legs"` (lower body), `"feet"`. One item per slot. |
-| `armor` | Defence, 0 to 1: the share of a hit it blocks. Pieces multiply: two pieces of 0.5 block 0.75. |
+| `armor` | Defence, 0 to 1: the share of a hit it blocks. Pieces multiply: two pieces of 0.5 block 0.75. With the immunity (total defence / 5), see [How armour works](#how-armour-works). |
 | `mobility` | Added to the wearer's walking speed and jump: `-0.10` = 10 % slower. |
 | `noise` | Added to how loud the wearer moves: `0.35` = 35 % louder, `-0.25` = quieter. |
 | `price` | The store's price. `-1` = not sold. Left out: 150, plus 50 for every 5 % of armour. |
@@ -412,6 +412,20 @@ it used to `inventory.use.<player>.<tool>` (a float, on the host). The inventory
 ammo and clears the key every tick; read `inventory.ammo.<player>.<tool>` to know when it is empty. The McPuppet
 Basic Tools Pack's blowtorch does this with its fuel.
 
+## How armour works
+
+A hit of `damage` (share of full health) takes `max(0, min(damage - immunity, damage * (1 - defense)))`: the
+stronger of two protections. The **immunity** is the defence / 5; it wins up to hits of 0.2 (20 % of health), so
+small hits on heavy armour do little or nothing. Above that the defence's share wins.
+
+- The immunity is a budget per burst of damage, not per tick: what it absorbs is used up, and it fills again after
+  0.4 s without a loss (a hit the share protected leaves it whole). So damage over time gets through.
+- Bare-hand punches: no immunity, only the defence's share.
+- **Fire and other elemental damage: no armour at all.** A player standing in fire, and blows dealt with the causes
+  `fire`, `acid`, `poison`, `electric` or `elemental`, take the full damage.
+- A mode that changes health itself works the damage out with the formula above from the published `.defense` and
+  `.immunity` (the full damage for elemental attacks) and sets `inventory.armored.<player>` in the same tick.
+
 ## For mods that react to the player's gear
 
 On the host, the inventory publishes what each player's worn items add up to:
@@ -419,6 +433,7 @@ On the host, the inventory publishes what each player's worn items add up to:
 | Key | Meaning |
 |---|---|
 | `inventory.stat.<player>.defense` | 0 to 1, the share of a hit blocked. |
+| `inventory.stat.<player>.immunity` | The defence / 5 (full plate, defence 0.73: 0.146): see [How armour works](#how-armour-works). |
 | `inventory.stat.<player>.mobility` | A factor, 1 = normal. |
 | `inventory.stat.<player>.noise` | A factor, 1 = normal. A creature mod multiplies the sound it hears from that player by it. |
 

@@ -57,6 +57,7 @@ end
 local svWear = {}
 local svArmor = {}                -- player -> the share of a hit the worn items block
 local svHealth = {}               -- player -> health at the end of the last tick
+local svImm, svImmT = {}, {}      -- player -> immunity left in this burst of damage, when they last lost health
 local svSeq = 0
 
 local svExtra = {}                -- player -> {defense, mobility, noise} the including script adds (WardrobeExtra)
@@ -108,12 +109,58 @@ function WardrobeExtra(p, defense, mobility, noise)
 	svWear[p] = nil                                               -- (the totals are worked out again in the next tick)
 end
 
+-- (host) what a hit of `damage` (share of full health) takes from p through the armour (the user, 2026-11-15):
+--   max(0, min(damage - immunity, damage * (1 - armour)))   immunity = armour / 5
+-- the stronger of the two protections: up to 20 % of health the flat immunity (small hits on heavy armour do
+-- nothing), above that the armour's share. noImmunity: bare-hand punches ("punch should be able to damage anyone"):
+-- the share only. noArmour: fire and other elemental damage ("no armour for fire or other elemental attacks").
+WARDROBE_IMMUNITY = 0.2
+local function wbFormula(a, damage, absorbed)
+	return math.max(0, math.min(damage - absorbed, damage * (1 - a)))
+end
+function WardrobeTaken(p, damage, noImmunity, noArmour)
+	if noArmour then return damage end
+	local a = svArmor[p] or 0
+	return wbFormula(a, damage, noImmunity and 0 or math.min(damage, a * WARDROBE_IMMUNITY))
+end
+
+-- the engine's own: the immunity is a budget per burst of damage, not per tick (fire, acid, any damage over time
+-- lose a little every tick and would never get through a per-tick immunity - the Wardrobe session): the first
+-- loss uses it up, it fills again after WARDROBE_IMMUNITY_REFILL s without a loss. Fists skip it.
+WARDROBE_IMMUNITY_REFILL = 0.4
+local function wbTake(p, damage, noImmunity, noArmour)
+	if noArmour then return damage end
+	local a = svArmor[p] or 0
+	if noImmunity or a <= 0 then return damage * (1 - a) end
+	local now = GetTime()
+	if (svImmT[p] or -100) < now - WARDROBE_IMMUNITY_REFILL then svImm[p] = a * WARDROBE_IMMUNITY end
+	svImmT[p] = now
+	local absorbed = math.min(svImm[p] or 0, damage)
+	if damage - absorbed <= damage * (1 - a) then                  -- (the budget is spent only when the immunity is
+		svImm[p] = (svImm[p] or 0) - absorbed                        --  what protected: a big hit leaves it for the next -
+	end                                                              --  the Wardrobe session)
+	return wbFormula(a, damage, absorbed)
+end
+
+-- causes with no immunity (the punch), and causes the armour does nothing against (elemental)
+WARDROBE_NO_IMMUNITY = {fist = true}
+WARDROBE_NO_ARMOUR = {fire = true, acid = true, poison = true, electric = true, elemental = true}
+
+-- the game says nothing about what took a player's health (playerhurt has no cause): a fire burning at the player is
+-- taken to be the cause
+local function wbInFire(p)
+	local at = GetPlayerTransform(p).pos
+	return QueryAabbFireCount(VecAdd(at, Vec(-0.7, -0.2, -0.7)), VecAdd(at, Vec(0.7, 2.0, 0.7))) > 0
+end
+
 -- (host) damage that the armour is already taken off: for this mod's weapons, so a blow the armour would have
--- stopped from killing does not kill (the give-back in server.tick cannot undo a death)
+-- stopped from killing does not kill (the give-back in server.tick cannot undo a death). A blow the armour stops
+-- whole is not applied.
 function WardrobeDamage(victim, damage, cause, attacker)
-	local a = svArmor[victim] or 0
-	local d = damage * (1 - a)
-	if attacker then ApplyPlayerDamage(victim, d, cause or "", attacker) else ApplyPlayerDamage(victim, d, cause or "") end
+	local d = wbTake(victim, damage, WARDROBE_NO_IMMUNITY[cause or ""] == true, WARDROBE_NO_ARMOUR[cause or ""] == true)
+	if d > 0 then
+		if attacker then ApplyPlayerDamage(victim, d, cause or "", attacker) else ApplyPlayerDamage(victim, d, cause or "") end
+	end
 	svHealth[victim] = GetPlayerHealth(victim)
 	return d
 end
@@ -146,7 +193,7 @@ function InvWearServerTick(dt)
 			was = nil
 		end
 		if was and h > 0 and h < was and (svArmor[p] or 0) > 0 then
-			h = h + (was - h) * svArmor[p]
+			h = was - wbTake(p, was - h, false, wbInFire(p))         -- (through the armour - nothing back in a fire)
 			SetPlayerHealth(h, p)
 		end
 		svHealth[p] = h
@@ -155,6 +202,7 @@ function InvWearServerTick(dt)
 		if now[p] == nil then
 			changed = true
 			svArmor[p], svHealth[p], svSpeed[p], svNoise[p], svExtra[p] = nil, nil, nil, nil, nil
+			svImm[p], svImmT[p] = nil, nil
 		end
 	end
 	if changed then

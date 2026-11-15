@@ -12,6 +12,8 @@
 --   inventory.items.<id>.mobility / .noise               clothing: added to the wearer's mobility (walking speed
 --                                                        and jump height) / noise as a share (-0.1 = 10 % less,
 --                                                        -0.3 = 30 % quieter)
+--   inventory.stat.<player>.immunity                     (host) defense / 5: a hit takes max(0, min(damage -
+--                                                        immunity, damage * (1 - defense))); elemental: no armour
 --   inventory.stat.<player>.defense / .mobility / .noise    (host, written here) what the player wears adds up to:
 --                                                        defense 0..1, mobility and noise as factors (1 = unchanged).
 --                                                        An enemy mod multiplies the noise it hears by .noise.
@@ -806,6 +808,7 @@ local function publishStats(p, v)
 	if stats[p] ~= sig then
 		stats[p] = sig
 		SetFloat("inventory.stat." .. p .. ".defense", d)
+		SetFloat("inventory.stat." .. p .. ".immunity", d * (WARDROBE_IMMUNITY or 0.2))   -- (a hit loses this first)
 		SetFloat("inventory.stat." .. p .. ".mobility", m)
 		SetFloat("inventory.stat." .. p .. ".noise", n)
 	end
@@ -2531,7 +2534,7 @@ local function invDrawMain()
 	end
 	-- what is worn adds up to, right of the avatar
 	local st = C.stats(mine)
-	local lines = {{"DEFENCE", math.floor(st.defense * 100 + 0.5) .. "%"}, {"MOBILITY", pctText(st.mobility - 1, true)}, {"NOISE", pctText(st.noise - 1, true)}}
+	local lines = {{"DEFENCE", math.floor(st.defense * 100 + 0.5) .. "%"}, {"IMMUNITY", tostring(math.floor(st.defense * 100 * (WARDROBE_IMMUNITY or 0.2) + 0.5))}, {"MOBILITY", pctText(st.mobility - 1, true)}, {"NOISE", pctText(st.noise - 1, true)}}
 	for i = 1, storeOpen and 0 or #lines do
 		UiPush()
 		UiTranslate(avX + avW + 20, top + (i - 1) * 96 + 8)
