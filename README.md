@@ -40,6 +40,8 @@ The host enables it; everyone downloads it when joining. The host keeps every in
 ## For modders
 Other mods can add items, clothing and weapons, hand items out, read what players carry, pay gold, read item colours and hear melee hits, all through the registry. The guides: [MODDING.md](MODDING.md) (items, the registry API, gold, colours, melee hits), [MODDING_CLOTHING.md](MODDING_CLOTHING.md), [MODDING_WEAPONS.md](MODDING_WEAPONS.md), and an [example pack](example%20pack) to copy.
 
+**Game modes: don't keep your tools out of the inventory.** Tools in `inventory.keeptools` stay on the game's own tool bar, whose number keys clash with the inventory's hotkeys 1-9. Make them inventory items instead (declare with price -1, `inventory.give`, `inventory.use`, `inventory.take` at round end): see [MODDING.md](MODDING.md), "Game modes".
+
 **Planning to add your own items, clothing or weapons?** Join the [Discord server](https://discord.gg/gNpRewdkxf): the mod is in alpha and its API may still change, and changes to the API will be announced there first.
 
 ## Community

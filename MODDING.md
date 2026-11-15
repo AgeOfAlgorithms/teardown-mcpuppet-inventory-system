@@ -368,6 +368,25 @@ ClearKey("inventory.block." .. p)
 SetString("inventory.keeptools", "mymode_goo mymode_noisemaker", true)
 ```
 
+**Warning: tools in `inventory.keeptools` stay on the game's own tool bar.** The inventory takes over the game's bar
+and number keys for every other tool, but it leaves kept tools alone, so they keep their game groups. The game's bar
+then shows them, and its number keys 1-6 pick them while the inventory's hotkeys 1-9 pick other items with the same
+keys. Players get two tool bars that fight over the number keys.
+
+**The fix: make your tools inventory items instead of keeping them.**
+
+1. Declare each tool on every machine (in both `server.init` and `client.init`): `inventory.tools.<id>` = true, with
+   `.price` = -1 (not sold), `.icon` (a picture in your mod), and for tools that get used up `.ammo` (uses per item)
+   and `.spent` = true (the item goes when the last use is gone).
+2. Hand them out with `inventory.give.<player>` (for example `"mymode_goo:1:2"` for 2 uses); they land on the
+   player's hotkeys.
+3. Count uses with `inventory.use.<player>.<id>` instead of `SetToolAmmo`, and don't call `SetToolEnabled` on them.
+4. Take them back when the round ends with `inventory.take.<player>` (see "Taking items back"); kept inventories
+   last across maps, so leftovers would otherwise carry over.
+
+Keep `inventory.keeptools` only for tools players must never see on the inventory's hotbar, and only for players
+whose inventory is blocked.
+
 ## Guns, ammo and reloading
 
 A gun can hold rounds of separate **ammo items**: give the gun `inventory.tools.<gun>.takes = "<ammo id> ..."` and
