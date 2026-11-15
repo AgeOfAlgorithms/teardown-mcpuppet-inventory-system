@@ -140,6 +140,11 @@ function InvWearServerTick(dt)
 		-- armour: the blocked share of what was lost since the last tick comes back
 		local h = GetPlayerHealth(p)
 		local was = svHealth[p]
+		local ak = "inventory.armored." .. p                         -- (another mod already took the armour off what it
+		if GetBool(ak) then                                          --  did to p's health - Humans vs Clickers' strikes
+			ClearKey(ak)                                             --  - so nothing comes back this time)
+			was = nil
+		end
 		if was and h > 0 and h < was and (svArmor[p] or 0) > 0 then
 			h = h + (was - h) * svArmor[p]
 			SetPlayerHealth(h, p)
