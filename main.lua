@@ -11,6 +11,7 @@
 #include "inv_core.lua"
 #include "inv.lua"
 #include "inv_color.lua"
+#include "inv_keep.lua"
 
 -- (test builds add their modules here)
 

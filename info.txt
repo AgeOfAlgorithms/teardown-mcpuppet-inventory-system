@@ -1,6 +1,6 @@
 name = McPuppet Inventory System (Alpha)
 author = AgeOfAlgorithms and Claude
-description = ALPHA: early and in active development, it may change drastically. A real inventory on any map, single player and multiplayer: you start with nothing, pick things up (E), carry them in a grid, put tools on hotkeys 1-9, wear clothing and armour from clothing packs, buy and sell in the store with gold coins, and drop anything back into the world. Every weapon is a real object that can lie in the world and be picked back up, ammo is counted, bare hands punch, and you drop everything when you die. I opens the inventory.
+description = ALPHA: early and in active development, it may change drastically. A real inventory on any map, single player and multiplayer, and EMPTY by itself: the items come from packs (McPuppet Basic Tools Pack, Guns Pack, Clothing Pack, Melee Weapons Pack, or anyone's). You start with nothing, pick things up (E), carry them in a grid, put tools on hotkeys 1-9, wear clothing and armour, buy and sell in the store with gold coins, and drop anything back into the world. Everything you carry is a real object, ammo is counted, bare hands punch, you drop everything when you die, and your inventory is kept from map to map. I opens the inventory.
 tags = Gameplay
 version = 2
 preview = preview_td.jpg

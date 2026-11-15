@@ -36,13 +36,54 @@
 --   inventory.used.last / .<n % 16>.player / .id        a consumable was used (fields first, the counter last)
 --   inventory.price.<id> = n                            the store's price of an item (-1: not sold); unset: a default
 --   inventory.store = 0                                 no store (a map or a game mode turns it off)
+--   inventory.block.<player> = true                     (host, synced) the inventory is OFF for that player: no screen,
+--                                                       HUD, pickups, punch, store, consumables, clothing effects; their
+--                                                       tool wheel left alone; what they have is kept (not dropped at
+--                                                       death) and back when the key is false or cleared
+--   inventory.goldadd.<player> = "n[:reason] ..."       (host) gold paid (+n) or taken (-n), appended by any mod, read
+--                                                       and cleared each tick: on the wallet (made first if missing),
+--                                                       never below 0, saved; a note "+150 gold: Round won" (_ in a
+--                                                       reason shows as a space) unless the player is blocked
+--   inventory.present = true                            (synced) the Inventory runs (set again every second)
+--   inventory.spend.<player> = "token:n[:reason] ..."   (host) a mod's purchases, read and cleared each tick, each all
+--                                                       or nothing; inventory.spent.<token> = "ok" / "no" (host, the
+--                                                       buying mod clears it); works while blocked
+--   inventory.gold.<player>                             made as soon as a player is seen (not with inventory.free)
+--   inventory.key.open = "i"                            (every machine) the key that opens the inventory screen
+--   inventory.screenopen = true                         (every machine, local) this player's inventory screen is open:
+--                                                       hide world labels / name tags that would draw over it
+--   inventory.keep = "session" / "map"                  (synced) the host's option: kept until NEW SESSION, or reset
+--                                                       with every map / mode change
+--   inventory.session = "s<n>"                          (synced) changes whenever the kept inventories start over
+--                                                       (NEW SESSION; "Reset every map": every map) - keep your own
+--                                                       per-player things with it and drop them when it changes
+--   inventory.tools.<tool id>.takes = "ammo_a ..."      a gun: the ammo items it can be loaded with (drag a stack onto
+--                                                       it; a double click unloads); kind "ammo" items, .box per sale
+--   inventory.items.<id>.box / .model / .boost / .boostTime   sold by the box of .box; lying in the world as the
+--                                                       game tool .model; a consumable: +.boost speed for .boostTime s
+--   inventory.ammo.<p>.<tool>                           (host) the rounds loaded in that player's tool
+--   inventory.shots.<p>.<tool>                          (host) rounds used from it so far (a counter)
+--   inventory.use.<p>.<tool> = n                        (host, a mod's own tool) n rounds / fuel used: taken off what is
+--                                                       loaded in it (add to it; read and cleared each tick)
+--   inventory.cap.<p>.<tool> = n                        (host, a gun mod) at most n rounds fireable now: the game's
+--                                                       count; 0 while it reloads (magazines live in the gun's mod)
+--   inventory.dropgold = "x,y,z,n x,y,z,n ..."          (host) gold dropped into the world by another mod (a monster
+--                                                       killed: n gold at x,y,z), read and cleared each tick
+--   inventory.keepondeath = true                        (host) a game mode's: players keep everything when they die
+--                                                       (items, worn clothes, gold: nothing dropped)
+--   inventory.startgold = n                             (host) the gold a new wallet starts with (unset: the mod's
+--                                                       option, 500 by default, at most 2000)
+--   inventory.deathloss = 0..1                          (host) the share of a player's gold dropped where they die
+--                                                       (unset: the mod's option, 20 % by default)
+--   inventory.keeptools = "id id ..."                   (host) tools the inventory never touches: not items, never
+--                                                       enabled / disabled / put away - the mod that hands them out runs them
 --   inventory.sell = 0..1                               (host) the share of its price an item sells back for
 --                                                       (0.6 when unset; 0: no selling)
 --
 -- Clients are not trusted: the engine does not tell a server function who called it, so every request carries the
 -- caller's key, a random string the host sent to that player alone (ClientCall to one player); a request for
 -- another player's inventory needs that player's key. Everything else is decided on the host.
--- Tools are items by their tool id (every key under game.tool); clothing is what any pack registered
+-- A tool is an item when a mod declared it (inventory.tools.<id>); clothing is what any pack registered
 -- (inventory.clothing.*, InventoryClothing of inventory_api.lua), and what is worn goes to inventory.wear.<player>.
 -- The wear engine (wardrobe_engine.lua, melee.lua - the Wardrobe session's files, in this mod since 2026-11-13: a
 -- clothing or weapon pack needs this mod alone) puts the clothes on the character, applies armour and mobility and
@@ -60,19 +101,37 @@ INV_GOLD_START = 500     -- gold coins every player starts with (the user, 2026-
 
 ----- shared: item definitions (each machine keeps its own) -----
 
--- Ammo is finite: an item of these tools is a pack of this many (the game's own starting counts), counted down as
--- it is used; another one picked up or bought adds its pack to the count. Tools not listed (spray can,
--- extinguisher, leaf blower) need none. A mod's tool: inventory.tools.<id>.ammo = its pack, .spent = true when the
--- item should go with its last one; without them it needs no ammo.
-local AMMO = {blowtorch = 20, shotgun = 12, plank = 8, pipebomb = 6, gun = 6, bomb = 6, wire = 6, rocket = 6, booster = 6,
-	turbo = 6, explosive = 4, rifle = 6, steroid = 2}
--- used up, these are gone from the inventory (a gun stays, empty)
--- the game's tools that are never items (never in anyone's hands): the sledge - the user, 2026-11-15: "The game's
--- sledge hammer is too fast, and so it too powerful compared to other weapons. You need to remove it and create our
--- own" (the Wardrobe pack's wardrobe_sledge: the same model, a slower melee swing)
-local NOT_ITEMS = {sledge = true}
-local SPENT = {pipebomb = true, bomb = true, explosive = true, plank = true, wire = true, booster = true, turbo = true,
-	steroid = true}
+-- The Inventory is EMPTY by itself (the user, 2026-11-15: "it's a mistake to put any items in the inventory by default
+-- ... the inventory mod should be empty by itself"): a game tool is an item only when a mod declared it
+-- (inventory.tools.<id>.* or a pack's inventory.weapons.<id>.*); every other tool is taken from everyone. The game's
+-- tools, their ammo, BlueTide, magazines and reloading are in the McPuppet Basic Guns / Tools Packs.
+-- inventory.block.<player> (bool, a mod on the host, synced; Humans vs Clickers' monsters): the inventory is off for that
+-- player - no screen, HUD, pickups, punches, purchases, consumables, clothing effects; the tool wheel left alone - and
+-- what they have stays (not dropped at death) for when the key goes false or away
+function invBlocked(p)
+	return GetBool("inventory.block." .. p)
+end
+-- inventory.keeptools = "id id ..." (host): game tools the inventory never touches (not items, the wheel left alone):
+-- a mod hands them out and spends them itself
+local keepStr, keepSet = nil, {}
+function invKeptTool(id)
+	local s = GetString("inventory.keeptools")
+	if s ~= keepStr then
+		keepStr, keepSet = s, {}
+		for w in string.gmatch(s, "%S+") do keepSet[w] = true end
+	end
+	return keepSet[id] == true
+end
+INV_BOOST_MAX, INV_BOOST_FADE = 120, 5    -- s: a consumable's speed boost adds up to this much, fades over the last seconds
+
+-- a tool a mod declared: its .takes ("ammo_a ammo_b") as a list, or nil
+local function takesOf(k)
+	local s = GetString(k .. ".takes")
+	if s == "" then return nil end
+	local t = {}
+	for w in string.gmatch(s, "%S+") do t[#t + 1] = w end
+	return t
+end
 
 -- A file of ANOTHER mod (an icon, a drop model): scripts load other mods' files by absolute path, "RAW:<that
 -- mod's folder>/<file>". mod: its id, or nil / "" - then the enabled mod whose folder has the file (found once).
@@ -117,6 +176,7 @@ function invSellValue(it, price, share)
 	if not def or not price or price < 0 or share <= 0 then return nil end
 	local n = it.n or 1
 	if def.kind == "tool" and def.pack then n = math.max(0, math.min(1, (it.ammo or 0) / def.pack)) end
+	if def.box then n = n / def.box end                              -- (ammo: priced by the box, sold by the round)
 	return math.floor(price * share * n + 0.0001)
 end
 
@@ -159,15 +219,18 @@ function invScanDefs()
 	for i = 1, #tools do
 		local id = tools[i]
 		local k = "inventory.tools." .. id
-		if NOT_ITEMS[id] then
-			-- (not an item: the wheel loop keeps it out of every hand)
+		local wk0 = "inventory.weapons." .. id                        -- (declared: the key, or keys under it)
+		local declared = HasKey(k) or #ListKeys(k) > 0 or HasKey(wk0) or #ListKeys(wk0) > 0
+		if invKeptTool(id) or not declared then
+			-- (not an item: kept tools are left alone, the rest are taken from everyone by the wheel loop)
 		elseif not C.defs[id] then
-			local pack, spent = AMMO[id], SPENT[id]
+			local pack, spent = nil, nil
 			if HasKey(k .. ".ammo") then pack, spent = GetInt(k .. ".ammo"), GetBool(k .. ".spent") end
 			if pack and pack <= 0 then pack = nil end
 			C.define({id = id, kind = "tool", tool = id, icon = "ui/terminal/tool/" .. id .. ".png",
-				pack = pack, spent = spent or nil})
+				pack = pack, spent = spent or nil, takes = takesOf(k)})
 		end
+		if C.defs[id] and HasKey(k .. ".takes") then C.defs[id].takes = takesOf(k) end
 		if C.defs[id] then
 			if not C.defs[id].name or C.defs[id].namePending then nameOf(C.defs[id], "game.tool." .. id .. ".name") end
 			-- a pack's melee weapon brings its own icon (the game has none for it): a file in that mod's folder
@@ -225,7 +288,11 @@ function invScanDefs()
 				stack = math.max(1, GetInt(k .. ".stack")), slot = slot ~= "" and slot or nil,
 				armor = GetFloat(k .. ".armor"), mobility = GetFloat(k .. ".mobility"), noise = GetFloat(k .. ".noise"),
 				icon = modFile(GetString(k .. ".icon"), GetString(k .. ".mod")),
-				drop = modFile(GetString(k .. ".drop"), GetString(k .. ".mod")), heal = GetFloat(k .. ".heal")})
+				drop = modFile(GetString(k .. ".drop"), GetString(k .. ".mod")), heal = GetFloat(k .. ".heal"),
+				box = GetInt(k .. ".box") > 1 and GetInt(k .. ".box") or nil,
+				model = GetString(k .. ".model") ~= "" and GetString(k .. ".model") or nil,
+				boost = GetFloat(k .. ".boost") > 0 and GetFloat(k .. ".boost") or nil,
+				boostTime = GetFloat(k .. ".boostTime") > 0 and GetFloat(k .. ".boostTime") or nil})
 			nameOf(def, k .. ".name")
 		end
 	end
@@ -261,7 +328,19 @@ function invAimed(p, bodies)
 	return best
 end
 
+-- Gold lying in the world (the user, 2026-11-15: dropped from the wallet with a slider, a share of it dropped at death):
+-- a world item of this id whose .n is the amount; picked up into the wallet, never into the grid. Its model by amount:
+-- a coin, a pile of coins, a pouch, pouches (vox/gold_*.vox, tools/make_gold.py).
+INV_GOLD_ITEM = "inventory_gold"
+INV_GOLD_TIERS = {{25, "coin"}, {200, "coins"}, {1000, "pouch"}, {math.huge, "pouches"}}
+function invGoldModel(n)
+	for _, t in ipairs(INV_GOLD_TIERS) do
+		if n < t[1] then return "MOD/vox/gold_" .. t[2] .. ".vox" end
+	end
+end
+
 function invName(it)
+	if it.id == INV_GOLD_ITEM then return invGold(it.n or 0) .. " gold" end
 	local def = C.defs[it.id]
 	local name = def and def.name or invPrettyId(it.id)
 	if it.n and it.n > 1 then name = name .. " x" .. it.n end
@@ -340,8 +419,8 @@ end
 
 -- pick up into a player's inventory -> how many did not fit. A tool already in the wheel takes the added ammo
 -- from the instance again (the game's own count would overwrite it).
-local function addTo(p, id, n, ammo)
-	local left = C.add(inv(p), id, n, ammo)
+local function addTo(p, id, n, ammo, noWear)
+	local left = C.add(inv(p), id, n, ammo, noWear)
 	if live[p] then live[p][id] = nil end
 	return left
 end
@@ -358,9 +437,13 @@ end
 local function spawnItem(it, t, vel)
 	local def = C.defs[it.id]
 	local ents
-	if def and def.kind == "tool" and def.tool then
-		local data = toolScale(def.tool)
-		if data then ents = SpawnTool(def.tool, t, false, data.scale) end
+	if it.id == INV_GOLD_ITEM then                                   -- gold: a coin, coins, a pouch or pouches
+		ents = Spawn("<body dynamic='true'><vox file='" .. invGoldModel(it.n or 1) .. "'/></body>", t)
+	end
+	local model = def and (def.kind == "tool" and def.tool or def.model)   -- (BlueTide: the game's bottle)
+	if model then
+		local data = toolScale(model)
+		if data then ents = SpawnTool(model, t, false, data.scale) end
 	end
 	if def and def.drop and def.drop ~= "" then                    -- the item's own model (a clothing mod's .vox)
 		-- (full-size 0.1 m voxels, no scale: a scale < 1 body is static in Teardown 2.2 whatever dynamic says -
@@ -403,6 +486,7 @@ local function adoptTagged()
 				local n = tonumber(GetTagValue(b, "n")) or 1
 				local it = {id = id, n = math.max(1, math.min(n, def.stack))}
 				if def.kind == "tool" then it.n, it.ammo = 1, def.pack and (tonumber(GetTagValue(b, "ammo")) or def.pack) or nil end
+				if def.takes then it.ammo = tonumber(GetTagValue(b, "ammo")) or 0 end   -- (a gun: the rounds loaded in it)
 				if def.kind == "tool" and toolScale(def.tool) then
 					local t = GetBodyTransform(b)
 					Delete(b)
@@ -437,6 +521,15 @@ end
 local function pickUp(p, body)
 	local w = world[body]
 	local it = w.it
+	if it.id == INV_GOLD_ITEM then                                   -- gold: into the wallet
+		if GetBool("inventory.free") or not HasKey("inventory.gold." .. p) then return end
+		SetInt("inventory.gold." .. p, GetInt("inventory.gold." .. p) + (it.n or 0), true)
+		dirty = true
+		PlaySound(pickSnd, GetBodyTransform(body).pos, 1)
+		note(p, "+" .. invGold(it.n or 0) .. " gold")
+		removeWorld(body)
+		return
+	end
 	local left = addTo(p, it.id, it.n, it.ammo)
 	if left >= it.n then
 		note(p, "Inventory full")
@@ -474,7 +567,11 @@ local function giveList(p, list)
 		local def = id and C.defs[id]
 		if def then
 			n = tonumber(n) or 1
-			ammo = def.pack and (tonumber(ammo) or def.pack) or nil      -- (no ammo given: one pack)
+			if def.takes then                                        -- (a gun: "gun:1:12" = 12 rounds loaded)
+				ammo = tonumber(ammo)
+			else
+				ammo = def.pack and (tonumber(ammo) or def.pack) or nil  -- (no ammo given: one pack)
+			end
 			local left = addTo(p, id, n, ammo)
 			dirty = true
 			while left > 0 do                                    -- no room: at the feet, a stack per body
@@ -515,7 +612,62 @@ local function shownLeft(p, id, r, a)
 	return r
 end
 
+-- Rounds for gun mods (magazines and reloading live in the gun's own mod - the user, 2026-11-15: "the logic for
+-- reloading lives in the mods that created the weapon"): inventory.ammo.<p>.<tool> = the rounds loaded in that player's
+-- tool, inventory.shots.<p>.<tool> = rounds used so far (a counter, host). A gun mod caps what can be fired now with
+-- inventory.cap.<p>.<tool> = n (0 while it reloads): the game's count is then min(cap, rounds) less the shots counted
+-- since the cap last changed (the mod lowers it a tick after a shot: no free shot in between).
+local shotsN = {}         -- player -> tool -> rounds used (inventory.shots)
+local ammoPub = {}        -- player -> tool -> rounds last published (inventory.ammo)
+local capSeen = {}        -- player -> tool -> {cap, used since it changed}
+
+local function countUsed(p, id, n)
+	if n <= 0 then return end
+	shotsN[p] = shotsN[p] or {}
+	shotsN[p][id] = (shotsN[p][id] or 0) + n
+	SetInt("inventory.shots." .. p .. "." .. id, shotsN[p][id])
+end
+
+local function publishAmmo(p, id, n)
+	ammoPub[p] = ammoPub[p] or {}
+	if ammoPub[p][id] ~= n then
+		ammoPub[p][id] = n
+		SetInt("inventory.ammo." .. p .. "." .. id, n)
+	end
+end
+
+-- (each pass) a capped tool: the game's count = what the cap and the rounds allow; shots off the rounds
+local function capTick(p, id, it, mine, joinerFree, shots, cap)
+	capSeen[p] = capSeen[p] or {}
+	local cs = capSeen[p][id]
+	if not cs or cs.cap ~= cap then
+		cs = {cap = cap, used = 0}
+		capSeen[p][id] = cs
+	end
+	local was = type(mine[id]) == "number" and mine[id] or nil     -- (the count last written into the game)
+	if not mine[id] then SetToolEnabled(id, true, p) elseif not IsToolEnabled(id, p) then SetToolEnabled(id, true, p) end
+	local cur = GetToolAmmo(id, p)
+	local used = 0
+	if joinerFree then
+		used = shots and shots[id] or 0
+	elseif was then
+		local r = shownLeft(p, id, cur, was)
+		if r < was then used = was - math.max(0, r) elseif r > 9000 and r < 9999 then used = 9999 - r end
+	end
+	used = math.min(used, it.ammo or 0)
+	if used > 0 then
+		it.ammo, dirty = math.max(0, (it.ammo or 0) - used), true
+		cs.used = cs.used + used
+		countUsed(p, id, used)
+	end
+	local allow = math.max(0, math.min(cap - cs.used, it.ammo or 0))
+	local write = joinerFree and (allow > 0 and 9999 or 0) or allow
+	if cur ~= write then SetToolAmmo(id, write, p) end
+	mine[id] = joinerFree and allow or write
+end
+
 local function enforceTools(p, v, isAlive)
+	if invBlocked(p) then return end                                 -- (the wheel is the other mod's)
 	local wheel = isAlive and C.wheel(v) or {}
 	local mine = live[p]
 	local tools = ListKeys("game.tool")
@@ -525,7 +677,13 @@ local function enforceTools(p, v, isAlive)
 	for i = 1, #tools do
 		local id = tools[i]
 		local it = wheel[id]
-		if it then
+		if it and it.ammo == nil and C.defs[id] and C.defs[id].takes then it.ammo = 0 end   -- (a gun: never unlimited)
+		local capK = "inventory.cap." .. p .. "." .. id
+		if invKeptTool(id) then
+			-- (inventory.keeptools: never enabled or disabled here)
+		elseif it and HasKey(capK) then
+			capTick(p, id, it, mine, joinerFree, shots, GetInt(capK))
+		elseif it then
 			if not mine[id] then
 				SetToolEnabled(id, true, p)
 				SetToolAmmo(id, (joinerFree and it.ammo and it.ammo > 0) and 9999 or it.ammo or 9999, p)
@@ -535,6 +693,7 @@ local function enforceTools(p, v, isAlive)
 				if it.ammo and joinerFree then
 					local a = math.max(0, it.ammo - (shots and shots[id] or 0))
 					if a ~= it.ammo then
+						countUsed(p, id, it.ammo - a)
 						it.ammo = a
 						dirty = true
 					end
@@ -549,6 +708,7 @@ local function enforceTools(p, v, isAlive)
 						a = math.max(0, a - (9999 - r))
 					end
 					if a ~= it.ammo then
+						if a < it.ammo then countUsed(p, id, it.ammo - a) end
 						it.ammo = a
 						dirty = true
 					end
@@ -569,11 +729,12 @@ local function enforceTools(p, v, isAlive)
 			mine[id] = nil
 			if IsToolEnabled(id, p) then SetToolEnabled(id, false, p) end
 		end
+		if it and it.ammo then publishAmmo(p, id, math.floor(it.ammo)) end
 	end
 	-- a tool taken out of the wheel may still be the one in the hands: put it away
 	local held = GetPlayerTool(p)
 	-- (the game's sledge is no item but the sandbox still puts it in the hands at a respawn: run 2026-11-15, flag 9)
-	if held ~= "" and held ~= "none" and not wheel[held] and (NOT_ITEMS[held] or (C.defs[held] and C.defs[held].kind == "tool")) then
+	if held ~= "" and held ~= "none" and not wheel[held] and not invKeptTool(held) then
 		SetPlayerTool("none", p)
 	end
 	-- a hotkey's tool (set for a few passes: the game's own number keys pick by tool group at the same time)
@@ -592,6 +753,7 @@ local function publishWorn(p, v)
 		if it then list = list .. (list == "" and "" or " ") .. it.id end
 	end
 	if list == "" then list = "none" end
+	if invBlocked(p) then list = "own" end                          -- (blocked: the character's own look, no stats)
 	if worn[p] ~= list then
 		worn[p] = list
 		SetString("inventory.wear." .. p, list)
@@ -604,12 +766,26 @@ end
 -- other kinds (inventory.items with a slot) add. The totals it answers with are published.
 local stats = {}         -- player -> the "defense mobility noise" last written
 local extras = {}        -- player -> the "defense mobility noise" of non-clothing-pack pieces last told to the engine
+local wasBlocked = {}     -- player -> inventory.block as last seen
+local boostEnd, boostOf, boostShown = {}, {}, {}   -- BlueTide: player -> when it ends (GetTime), its share, the HUD's seconds
 local function publishStats(p, v)
 	local own = C.stats(v, true)
-	local e = string.format("%.3f %.3f %.3f", own.defense, own.mobility, own.noise)
+	local boost, left = 0, (boostEnd[p] or 0) - GetTime()               -- BlueTide: extra mobility while it lasts
+	if left > 0 and GetPlayerHealth(p) > 0 then
+		boost = (boostOf[p] or 0) * math.min(1, left / INV_BOOST_FADE)
+	elseif boostEnd[p] then
+		boostEnd[p], boostOf[p], left = nil, nil, 0
+	end
+	local secs = math.max(0, math.ceil(left))
+	if boostShown[p] ~= secs then                                     -- (the HUD's timer, whole seconds)
+		boostShown[p] = secs
+		SetInt("inventory.boost." .. p, secs, true)
+	end
+	local e = string.format("%.3f %.3f %.3f", own.defense, own.mobility + boost, own.noise)
+	if invBlocked(p) then e = "blocked" end
 	if extras[p] ~= e then
 		extras[p] = e
-		WardrobeExtra(p, own.defense, own.mobility - 1, own.noise - 1)
+		if e == "blocked" then WardrobeExtra(p, 0, 0, 0) else WardrobeExtra(p, own.defense, own.mobility - 1 + boost, own.noise - 1) end
 	end
 	local d, m, n = WardrobeArmor(p), WardrobeMobility(p), WardrobeNoise(p)
 	local sig = string.format("%.3f %.3f %.3f", d, m, n)
@@ -637,10 +813,7 @@ local function publishCounts(p, v)
 	counts[p] = now
 end
 
--- the game's tools; another mod's tool costs TOOL_PRICE unless inventory.price.<id> says otherwise
-local PRICES = {spraycan = 50, extinguisher = 100, blowtorch = 300, plank = 200, wire = 300, leafblower = 300,
-	booster = 400, turbo = 400, steroid = 300, gun = 500, shotgun = 800, rifle = 1200, pipebomb = 600, bomb = 700,
-	explosive = 900, rocket = 1500}
+-- a declared tool without a price of its own (inventory.tools.<id>.price) costs this
 local TOOL_PRICE = 1000
 
 -- what the store asks for an item (-1: not sold)
@@ -648,10 +821,11 @@ local function priceOf(id)
 	local def = C.defs[id]
 	if not def then return -1 end
 	if HasKey("inventory.price." .. id) then return GetInt("inventory.price." .. id) end
+	if def.price then return def.price end
 	if def.kind == "tool" then
 		if HasKey("inventory.tools." .. id .. ".price") then return GetInt("inventory.tools." .. id .. ".price") end
 		if HasKey("inventory.weapons." .. id .. ".price") then return GetInt("inventory.weapons." .. id .. ".price") end
-		return PRICES[id] or TOOL_PRICE
+		return TOOL_PRICE
 	end
 	if def.kind == "clothing" then
 		if HasKey("inventory.clothing." .. id .. ".price") then return GetInt("inventory.clothing." .. id .. ".price") end
@@ -666,7 +840,7 @@ local function storeOn()
 end
 
 -- the store's list for the clients: tools, clothing, the rest, each by name; published when it changes
-local KIND_ORDER = {tool = 1, clothing = 2, consumable = 3, misc = 4}
+local KIND_ORDER = {tool = 1, ammo = 1.5, clothing = 2, consumable = 3, misc = 4}
 local function publishStock()
 	local list = {}
 	if storeOn() then
@@ -691,16 +865,72 @@ local function publishStock()
 	end
 end
 
--- a player's gold coins (the wallet is made with INV_GOLD_START the first time) -> n, or false: the store is free
+-- the gold a new wallet starts with: inventory.startgold (host, a game mode's), else the mod's option
+-- (savegame.mod.startgold, at most 2000 - the user, 2026-11-15: "make the starting money configurable? up to 2000
+-- max"), else INV_GOLD_START (500)
+function invStartGold()
+	if HasKey("inventory.startgold") then return math.max(0, GetInt("inventory.startgold")) end
+	if HasKey("savegame.mod.startgold") then return math.max(0, math.min(2000, GetInt("savegame.mod.startgold"))) end
+	return INV_GOLD_START
+end
+
+-- a player's gold coins (the wallet is made with invStartGold() the first time) -> n, or false: the store is free
 local function balance(p)
 	if GetBool("inventory.free") then return false end              -- (a host switch: everything free, no wallet)
 	local k = "inventory.gold." .. p
-	if not HasKey(k) then SetInt(k, INV_GOLD_START, true) end
+	if not HasKey(k) then SetInt(k, invStartGold(), true) end
 	return GetInt(k)
+end
+
+-- inventory.goldadd.<p> = "n[:reason] n[:reason] ...": gold another mod pays or takes (signed whole numbers), each
+-- change on the wallet (made first if missing), never below 0; a note on their screen unless they are blocked
+local presentT = 0
+function invGoldAdd(p, list)
+	if GetBool("inventory.free") then return end
+	for part in string.gmatch(list or "", "%S+") do
+		local n, reason = string.match(part, "^([%-%+]?%d+):?(.*)$")
+		n = tonumber(n)
+		local bal = balance(p)
+		if n and bal then
+			local now = math.max(0, bal + n)
+			SetInt("inventory.gold." .. p, now, true)
+			dirty = true
+			local d = now - bal
+			if d ~= 0 and not invBlocked(p) then
+				note(p, (d > 0 and "+" or "-") .. invGold(math.abs(d)) .. " gold" .. (reason ~= "" and (": " .. string.gsub(reason, "_", " ")) or ""))
+			end
+		end
+	end
+end
+
+-- inventory.spend.<p> = "token:n[:reason] ...": another mod's purchases (Humans vs Clickers' shop), each all or nothing:
+-- taken when the balance is at least n (inventory.spent.<token> = "ok"), else nothing ("no"); in order, so of two
+-- that do not both fit only the first is paid. inventory.free: "ok", nothing taken.
+function invSpend(p, list)
+	for part in string.gmatch(list or "", "%S+") do
+		local token, n, reason = string.match(part, "^([%w_%-]+):(%d+):?(.*)$")
+		n = tonumber(n)
+		if token and n then
+			local bal = balance(p)
+			if not bal then
+				SetString("inventory.spent." .. token, "ok")
+			elseif bal >= n then
+				SetInt("inventory.gold." .. p, bal - n, true)
+				dirty = true
+				SetString("inventory.spent." .. token, "ok")
+				if n > 0 and not invBlocked(p) then
+					note(p, "-" .. invGold(n) .. " gold" .. (reason ~= "" and (": " .. string.gsub(reason, "_", " ")) or ""))
+				end
+			else
+				SetString("inventory.spent." .. token, "no")
+			end
+		end
+	end
 end
 
 -- is this request the player's own? (the key went to that player's machine alone)
 local function own(p, key)
+	if type(p) == "number" and invBlocked(p) then return false end
 	return type(p) == "number" and type(key) == "string" and keys[p] ~= nil and keys[p] == key and invs[p] ~= nil
 end
 
@@ -724,6 +954,11 @@ local function doUse(p, ref)
 	C.take(invs[p], ref, 1)
 	dirty = true
 	if def.heal and def.heal > 0 then SetPlayerHealth(math.min(1, GetPlayerHealth(p) + def.heal), p) end
+	if def.boost then                                                -- BlueTide: time added, at most INV_BOOST_MAX
+		local now = GetTime()
+		boostEnd[p] = math.min(now + INV_BOOST_MAX, math.max(now, boostEnd[p] or now) + (def.boostTime or 40))
+		boostOf[p] = def.boost
+	end
 	usedN = usedN + 1
 	local k = "inventory.used." .. (usedN % 16)
 	SetInt(k .. ".player", p)
@@ -755,22 +990,78 @@ local function doBuy(p, id)
 		return
 	end
 	local ammo = def.pack                                            -- (a tool: one pack; nil for the rest)
-	if C.add(C.copy(invs[p]), id, 1, ammo) > 0 then                 -- (tried on a copy: all or nothing)
+	local n = def.box or 1                                           -- (ammo: a box of rounds)
+	if C.add(C.copy(invs[p]), id, n, ammo, true) > 0 then           -- (tried on a copy: all or nothing)
 		note(p, "Inventory full")
 		return
 	end
 	if bal then SetInt("inventory.gold." .. p, bal - price, true) end
-	addTo(p, id, 1, ammo)
+	addTo(p, id, n, ammo, true)                                      -- (into the grid, not worn)
 	dirty = true
-	note(p, "Bought " .. def.name)
+	note(p, "Bought " .. (n > 1 and (n .. " ") or "") .. def.name)
 end
 
 -- sell what lies at ref (the whole stack) back to the store; only with a wallet to pay into
+-- the ammo a gun's rounds are (loaded, else the first it takes)
+function invLoadOf(it)
+	local def = it and C.defs[it.id]
+	return it and (it.load or (def and def.takes and def.takes[1])) or nil
+end
+
+local function takes(def, ammoId)
+	for _, a in ipairs(def and def.takes or {}) do
+		if a == ammoId then return true end
+	end
+	return false
+end
+
+-- a loaded gun's rounds back into the inventory (no room: at the feet)
+local function doUnload(p, ref)
+	ref = C.resolve(invs[p], ref)
+	local gun = ref and C.get(invs[p], ref)
+	local def = gun and C.defs[gun.id]
+	if not def or not def.takes or (gun.ammo or 0) < 1 then return end
+	local ammoId, n = invLoadOf(gun), math.floor(gun.ammo)
+	gun.ammo, gun.load = 0, nil
+	if live[p] then live[p][gun.id] = nil end                       -- (the game's count is written again)
+	local left = addTo(p, ammoId, n)
+	if left > 0 then dropFrom(p, {id = ammoId, n = left}) end
+	dirty = true
+	note(p, "Unloaded " .. n .. " " .. (C.defs[ammoId] and C.defs[ammoId].name or ammoId))
+end
+
+-- an ammo stack onto a gun that takes it: all of it loaded (other rounds in it come out first)
+local function doLoad(p, from, to)
+	local inv = invs[p]
+	from, to = C.resolve(inv, from), C.resolve(inv, to)
+	local am, gun = from and C.get(inv, from), to and C.get(inv, to)
+	local gdef = gun and C.defs[gun.id]
+	if not am or not gdef or not gdef.takes then return false end
+	local adef = C.defs[am.id]
+	if not adef or adef.kind ~= "ammo" then return false end
+	if not takes(gdef, am.id) then
+		note(p, "The " .. (gdef.name or gun.id) .. " doesn't take " .. (adef.name or am.id))
+		return true
+	end
+	if (gun.ammo or 0) > 0 and invLoadOf(gun) ~= am.id then doUnload(p, to) end
+	local n = am.n or 1
+	C.take(inv, from)
+	gun.ammo, gun.load = (gun.ammo or 0) + n, am.id
+	if live[p] then live[p][gun.id] = nil end
+	dirty = true
+	note(p, "Loaded " .. n .. " " .. (adef.name or am.id))
+	return true
+end
+
 local function doSell(p, ref)
 	if type(ref) ~= "string" or not storeOn() then return end
 	local bal = balance(p)
 	if not bal then return end
 	ref = C.resolve(invs[p], ref)                                    -- (a hotkey: the item it points at)
+	do                                                               -- (a loaded gun: its rounds stay yours)
+		local g = ref and C.get(invs[p], ref)
+		if g and C.defs[g.id] and C.defs[g.id].takes and (g.ammo or 0) > 0 then doUnload(p, ref) end
+	end
 	local it = ref and C.get(invs[p], ref)
 	local value = invSellValue(it, it and priceOf(it.id), invSellShare())
 	if not value then
@@ -920,7 +1211,11 @@ local function punchLand(p)
 			mat = GetShapeMaterialAtPosition(ent, VecAdd(endp, VecScale(into, 0.03))) or ""
 		end
 		if INV_TEST then INV_TEST.punches[#INV_TEST.punches] = INV_TEST.punches[#INV_TEST.punches] .. " [" .. tostring(mat) .. "]" end
-		if not (body ~= 0 and world[body]) then                      -- (not an item lying there)
+		local shape = (ent and ent ~= 0 and IsHandleValid(ent) and GetEntityType(ent) == "shape") and ent or 0
+		if shape ~= 0 and InventoryMeleeEvent then                   -- the melee hit event, as the weapons' (melee.lua):
+			InventoryMeleeEvent(p, shape, body, endp, dir, "fist", punchStat("power"), PUNCH.knock or 0)   -- villagers
+		end
+		if not (body ~= 0 and world[body]) and not (shape ~= 0 and HasTag(shape, "nohole")) then   -- (not an item; not nohole)
 			-- glass breaks; the rest: a dent in soft things. The centre a little inside the surface (on it, half
 			-- the ball is air and the hole looks tiny - Wardrobe's weapons, seen in game there)
 			local r = mat == "glass" and PUNCH.glass or PUNCH.hole
@@ -960,11 +1255,15 @@ function Inv.serverInit()
 	ClearKey("inventory.used")
 	ClearKey("inventory.stat")
 	ClearKey("inventory.gold")
+	ClearKey("inventory.boost")
+	ClearKey("inventory.ammo")
+	ClearKey("inventory.shots")
 	pickSnd = LoadSound("tool_pickup.ogg")
 	invScanDefs()
 	shared.inv = {n = 0, p = {}}
 	publishStock()
 	InvColor.serverInit()                                           -- (inventory.colors.*: inv_color.lua)
+	InvKeep.serverInit()                                            -- (inventories kept by name: inv_keep.lua)
 end
 
 -- the tools only (the last word after other scripts' ticks: the sandbox enables every tool each tick in multiplayer)
@@ -975,6 +1274,11 @@ function Inv.serverEnforce()
 end
 
 function Inv.serverTick(dt)
+	presentT = presentT - dt
+	if presentT <= 0 then                                            -- (other mods: is the Inventory running?)
+		presentT = 1
+		SetBool("inventory.present", true, true)
+	end
 	scanT = scanT - dt
 	if scanT <= 0 then
 		scanT = INV_SCAN
@@ -983,10 +1287,27 @@ function Inv.serverTick(dt)
 		publishStock()
 	end
 	InvColor.serverTick(dt)
+	if HasKey("inventory.dropgold") then                             -- other mods' gold drops (a monster killed)
+		local list = GetString("inventory.dropgold")
+		ClearKey("inventory.dropgold")
+		for x, y, z, n in string.gmatch(list, "(%-?[%d%.]+),(%-?[%d%.]+),(%-?[%d%.]+),(%d+)") do
+			n = math.floor(tonumber(n) or 0)
+			if n > 0 then
+				local a = math.random() * 6.2832
+				spawnItem({id = INV_GOLD_ITEM, n = n}, Transform(Vec(tonumber(x), tonumber(y), tonumber(z))),
+					Vec(math.cos(a) * 1.2, 2.5, math.sin(a) * 1.2))
+			end
+		end
+	end
 	local here = {}
 	for _, p in ipairs(GetAllPlayers()) do
 		here[p] = true
 		local v = inv(p)
+		if not InvKeep.claimed(p) then                               -- what they had on the last map / before leaving
+			local g = InvKeep.claim(p, v)
+			if g and g >= 0 then SetInt("inventory.gold." .. p, g, true) end
+			if InvKeep.claimed(p) then dirty = true end
+		end
 		local h = GetPlayerHealth(p)
 		local isAlive = h > 0
 		if HasKey("inventory.give." .. p) then
@@ -994,18 +1315,54 @@ function Inv.serverTick(dt)
 			ClearKey("inventory.give." .. p)
 			giveList(p, list)
 		end
-		if alive[p] and not isAlive then                             -- died: everything where they fell
+		if HasKey("inventory.goldadd." .. p) and InvKeep.claimed(p) then   -- (after their saved gold came back)
+			local list = GetString("inventory.goldadd." .. p)
+			ClearKey("inventory.goldadd." .. p)
+			invGoldAdd(p, list)
+		end
+		for _, tid in ipairs(ListKeys("inventory.use." .. p)) do          -- a mod's own tool used up some of its rounds / fuel
+			local k = "inventory.use." .. p .. "." .. tid
+			local n = GetFloat(k)
+			ClearKey(k)
+			local at = C.findTool(v, tid)
+			local it = at and C.get(v, at)
+			if it and n > 0 and (it.ammo or 0) > 0 then
+				local took = math.min(it.ammo, n)
+				it.ammo = it.ammo - took
+				countUsed(p, tid, took)
+				dirty = true
+			end
+		end
+		if HasKey("inventory.spend." .. p) and InvKeep.claimed(p) then     -- (a mod's purchases: all or nothing)
+			local list = GetString("inventory.spend." .. p)
+			ClearKey("inventory.spend." .. p)
+			invSpend(p, list)
+		end
+		local off = invBlocked(p)                                    -- (inventory.block: kept as it is, does nothing)
+		if off ~= wasBlocked[p] then
+			wasBlocked[p] = off
+			live[p] = {}                                             -- (unblocked: the wheel is set up again)
+			worn[p], extras[p] = nil, nil
+			if off then boostEnd[p], boostOf[p] = nil, nil end
+		end
+		if alive[p] and not isAlive and not off and not GetBool("inventory.keepondeath") then   -- died: everything where they fell
 			local all = C.takeAll(v)
 			for _, it in ipairs(all) do dropFrom(p, it, true) end
+			local bal = balance(p)                                    -- ... and a share of their gold
+			local lost = bal and math.floor(bal * invDeathShare() + 0.5) or 0
+			if lost > 0 then
+				SetInt("inventory.gold." .. p, bal - lost, true)
+				dropFrom(p, {id = INV_GOLD_ITEM, n = lost}, true)
+			end
 			dirty = true
 		end
 		alive[p] = isAlive
-		if isAlive and invPressed("interact", p) then
+		if isAlive and not off and invPressed("interact", p) then
 			local b = itemInView(p)
 			if b ~= 0 then pickUp(p, b) end
 		end
 		enforceTools(p, v, isAlive)
-		punchTick(p, isAlive)
+		if not off then punchTick(p, isAlive) end
 		publishWorn(p, v)
 		publishStats(p, v)
 		local bal = balance(p)
@@ -1013,9 +1370,15 @@ function Inv.serverTick(dt)
 	end
 	for p in pairs(invs) do                                          -- left the game
 		if not here[p] then
+			InvKeep.left(p, invs[p], HasKey("inventory.gold." .. p) and GetInt("inventory.gold." .. p) or -1)
 			invs[p], live[p], alive[p], worn[p], keys[p], money[p] = nil, nil, nil, nil, nil, nil
 			ClearKey("inventory.gold." .. p)
-			want[p], stats[p], extras[p] = nil, nil, nil
+			want[p], stats[p], extras[p], wasBlocked[p] = nil, nil, nil, nil
+			boostEnd[p], boostOf[p], boostShown[p] = nil, nil, nil
+			ClearKey("inventory.boost." .. p)
+			shotsN[p], ammoPub[p], capSeen[p] = nil, nil, nil
+			ClearKey("inventory.ammo." .. p)
+			ClearKey("inventory.shots." .. p)
 			punchAt[p], punchReady[p], screenOpen[p] = nil, nil, nil
 			ClearKey("inventory.stat." .. p)
 			ClearKey("inventory.wear." .. p)
@@ -1024,6 +1387,9 @@ function Inv.serverTick(dt)
 			dirty = true
 		end
 	end
+	InvKeep.serverTick(dt, invs, function(p)
+		return HasKey("inventory.gold." .. p) and GetInt("inventory.gold." .. p) or -1
+	end)
 	pubT = pubT - dt
 	if dirty and pubT <= 0 then
 		dirty, pubT = false, 0.1
@@ -1048,8 +1414,48 @@ function server.invHello(p)                                          -- "send me
 	if type(p) == "number" and keys[p] then ClientCall(p, "client.invKey", keys[p]) end
 end
 
+-- the host's "New session" (inventory screen): every inventory empty, every wallet back to the start, nothing kept
+function server.invNewSession(p, key)
+	if not own(p, key) or not IsPlayerHost(p) then return end
+	InvKeep.reset()
+	for q, v in pairs(invs) do
+		v.g, v.h, v.e = {}, {}, {}
+		live[q] = {}
+		if HasKey("inventory.gold." .. q) then SetInt("inventory.gold." .. q, invStartGold(), true) end
+		note(q, "New session: inventories and gold reset")
+	end
+	dirty = true
+end
+
 function server.invMove(p, key, from, to)
-	if own(p, key) and GetPlayerHealth(p) > 0 and C.move(invs[p], from, to) then dirty = true end
+	if not own(p, key) or GetPlayerHealth(p) <= 0 then return end
+	if doLoad(p, from, to) then return end                          -- (ammo onto a gun: loaded)
+	if C.move(invs[p], from, to) then dirty = true end
+end
+
+-- the share of a player's gold dropped where they die: inventory.deathloss (host, 0..1: a game mode's), else the mod's
+-- option (savegame.mod.deathloss, percent; 20 when unset - the user, 2026-11-15: "players should lose 20% of money
+-- when they die. How much they lose on death should be configurable")
+function invDeathShare()
+	if HasKey("inventory.deathloss") then return math.max(0, math.min(1, GetFloat("inventory.deathloss"))) end
+	if HasKey("savegame.mod.deathloss") then return math.max(0, math.min(100, GetInt("savegame.mod.deathloss"))) / 100 end
+	return 0.2
+end
+
+-- gold dropped from the wallet (the screen's slider), in front of the player
+function server.invDropGold(p, key, n)
+	if not own(p, key) or GetPlayerHealth(p) <= 0 then return end
+	n = math.floor(tonumber(n) or 0)
+	local bal = balance(p)
+	if not bal or n < 1 or n > bal then return end
+	SetInt("inventory.gold." .. p, bal - n, true)
+	dropFrom(p, {id = INV_GOLD_ITEM, n = n})
+	dirty = true
+	note(p, "Dropped " .. invGold(n) .. " gold")
+end
+
+function server.invUnload(p, key, ref)                               -- (a double click on a loaded gun)
+	if own(p, key) and GetPlayerHealth(p) > 0 then doUnload(p, ref) end
 end
 
 function server.invQuick(p, key, ref)
@@ -1097,6 +1503,9 @@ end
 local open = false
 local mine = C.new()     -- my inventory as last published
 local myMoney = nil      -- my gold coins (nil: the store is free)
+local moneySeen = nil    -- my gold as last seen (a change makes a float)
+local moneyFloats = {}   -- {d = change, t = when}: green "+n" / red "-n" rising from the HUD's gold and fading (the user)
+INV_FLOAT_TIME = 1.5
 
 -- gold coins drawn as the coin picture and the number, size px high, its vertical middle on the current point;
 -- align "left" (default) / "center" / "right" of the current point; col {r, g, b} (default gold)
@@ -1145,13 +1554,43 @@ local function tipLines(it, shop, ref)
 			if d + c > 0 then out[#out + 1] = {string.format("Swing  %.1f s", d + c), "plain"} end
 			if HasKey(wk .. ".reach") and GetFloat(wk .. ".reach") > 0 then out[#out + 1] = {string.format("Reach  %.1f m", GetFloat(wk .. ".reach")), "plain"} end
 			if GetFloat(wk .. ".knockback") > 0 then out[#out + 1] = {string.format("Knockback  %.0f", GetFloat(wk .. ".knockback")), "plain"} end
+		elseif def.takes then                                        -- a gun: what it takes, what is in it
+			local names = {}
+			for _, a in ipairs(def.takes) do names[#names + 1] = C.defs[a] and C.defs[a].name or a end
+			out[#out + 1] = {"Takes: " .. table.concat(names, ", "), "plain"}
+			if shop then
+				out[#out + 1] = {"Comes empty", "dim"}
+			elseif (it.ammo or 0) > 0 then
+				local l = invLoadOf(it)
+				out[#out + 1] = {"Loaded: " .. math.floor(it.ammo) .. " " .. (C.defs[l] and C.defs[l].name or l), "good"}
+				out[#out + 1] = {"Double-click it to unload", "dim"}
+			else
+				out[#out + 1] = {"Empty: drag its ammo onto it", "bad"}
+			end
 		elseif def.pack then
 			out[#out + 1] = {shop and ("Comes with " .. def.pack) or (math.ceil(it.ammo or 0) .. " left"), "plain"}
 		end
+	elseif def.kind == "ammo" then                                   -- which guns take it
+		local guns = {}
+		for gid, gdef in pairs(C.defs) do
+			for _, a in ipairs(gdef.takes or {}) do
+				if a == it.id then guns[#guns + 1] = gdef.name or gid end
+			end
+		end
+		table.sort(guns)
+		out[#out + 1] = {"For: " .. table.concat(guns, ", "), "plain"}
+		if shop then out[#out + 1] = {"A box of " .. (def.box or 1), "dim"} else out[#out + 1] = {"Drag onto the gun to load it", "dim"} end
 	elseif def.kind == "consumable" then
 		out[#out + 1] = {"Use: put it on a hotkey, press the number", "dim"}
 		if (def.heal or 0) > 0 then out[#out + 1] = {"Heals  +" .. math.floor(def.heal * 100 + 0.5) .. "%", "good"} end
+		if (def.boost or 0) > 0 then
+			out[#out + 1] = {"Speed  +" .. math.floor(def.boost * 100 + 0.5) .. "%  for " .. (def.boostTime or 40) .. " s", "good"}
+		end
 	end
+	-- a mod's own lines (inventory.tools.<id>.tip / inventory.items.<id>.tip = "line|line": a gun's magazine and the like)
+	local tip = GetString("inventory.tools." .. it.id .. ".tip")
+	if tip == "" then tip = GetString("inventory.items." .. it.id .. ".tip") end
+	for line in string.gmatch(tip, "[^|]+") do out[#out + 1] = {line, "plain"} end
 	if shop then
 		out[#out + 1] = {(not myMoney or shop.price == 0) and "Click to buy: free" or ("Click to buy: " .. invGold(shop.price) .. " gold"), "price"}
 	else
@@ -1205,6 +1644,23 @@ function drawTooltip(it, shop, ref, x, y, w, h)
 end
 local seenN = -1
 local drag = nil         -- the ref being dragged
+local dragT, dragX, dragY = 0, 0, 0   -- when and where the drag began
+local clickRef, clickT = nil, 0       -- the last click: on what, when (a second one soon after on it: a double click)
+local goldDrag, goldDialog = false, nil   -- the wallet dragged from the header; then {n = amount} while the slider shows
+INV_DOUBLE_CLICK = 0.4
+-- a click on an item (mouse: press and release on it; controller: A to take it, A to put it back): a double click on
+-- a loaded gun unloads it (the user, 2026-11-15: a double click rather than a long press, for controllers)
+function invClick(me, ref, key)
+	local now = GetTime()
+	if clickRef == ref and now - clickT <= INV_DOUBLE_CLICK then
+		clickRef = nil
+		local it = C.get(mine, ref)
+		local def = it and C.defs[it.id]
+		if def and def.takes and (it.ammo or 0) > 0 then ServerCall("server.invUnload", me, key, ref) end
+	else
+		clickRef, clickT = ref, now
+	end
+end
 local noteText, noteT = "", 0
 local seen, seenT, seenList = 0, 0, {}   -- the item I look at (for the hint), looked for a few times a second
 local scanC = 0
@@ -1212,6 +1668,17 @@ local sentOpen = false   -- the screen state the host was last told
 local myKey, helloT = nil, 0   -- the key my requests carry (from the host), asked for until it is here
 local shownMine = {}           -- a joiner: the tool in my hands and its ammo display last tick
 local storeOpen, storePage = false, 1
+local storeCat = 1        -- the store's category tab (STORE_CATS)
+local STORE_CATS = {"WEAPONS & TOOLS", "CLOTHING", "ITEMS"}
+-- an item's store category: 1 tools (the game's and the packs' weapons), 2 anything worn in a slot, 3 the rest
+function invStoreCat(id)
+	local def = C.defs[id]
+	if not def then return 3 end
+	if def.kind == "tool" or def.kind == "ammo" then return 1 end
+	if def.kind == "clothing" or def.slot then return 2 end
+	return 3
+end
+local resetAsk = nil      -- the host clicked "New session" once: until when a second click resets everyone
 
 -- what the store pays me for the item at ref (nil: it does not buy it, or there is no wallet)
 local function sellOffer(ref)
@@ -1221,7 +1688,6 @@ local function sellOffer(ref)
 	return it and invSellValue(it, storePrice[it.id], sellShare)
 end
 local storeList, storeN = {}, -1
-local STORE_COLS, STORE_ROWS = 4, 5
 
 function client.invKey(k)
 	myKey = k
@@ -1510,6 +1976,7 @@ function Inv.clientInit()
 end
 
 function Inv.clientTick(dt)
+	if GetString("inventory.key.open") ~= INV_KEY then SetString("inventory.key.open", INV_KEY) end   -- (other mods: the key)
 	scanC = scanC - dt
 	if scanC <= 0 then
 		scanC = INV_SCAN
@@ -1536,6 +2003,10 @@ function Inv.clientTick(dt)
 		local v = s.p and s.p["p" .. me]
 		mine = v and C.copy({g = v.g or {}, h = v.h or {}, e = v.e or {}}) or C.new()
 		myMoney = v and v.money or nil
+		if myMoney and moneySeen and myMoney ~= moneySeen then         -- a change: "+150" / "-50" floats up from the gold
+			moneyFloats[#moneyFloats + 1] = {d = myMoney - moneySeen, t = GetTime()}
+		end
+		moneySeen = myMoney
 		syncToolGroups(mine)
 	end
 	local st = shared.invStore
@@ -1553,7 +2024,7 @@ function Inv.clientTick(dt)
 			ServerCall("server.invHello", me)
 		end
 	end
-	if GetPlayerHealth(me) <= 0 then
+	if GetPlayerHealth(me) <= 0 or invBlocked(me) then
 		open, drag = false, nil
 	elseif (invPressed(INV_KEY) and not GetBool("proxchat.typing." .. me)) or (LastInputDevice() == INV_PAD and InputPressed("map")) then
 		open = not open
@@ -1602,6 +2073,8 @@ function Inv.clientTick(dt)
 		shownMine.id, shownMine.d = id, d
 	end
 	if open then avatarCamera(me) else avatar = nil end
+	if GetBool("inventory.screenopen") ~= open then SetBool("inventory.screenopen", open) end   -- (local: other mods
+	-- hide their world labels over the screen - asked for by the Villagers session, for the user)
 	if myKey and open ~= sentOpen then                              -- (the host: no punches from clicks in the screen)
 		sentOpen = open
 		ServerCall("server.invScreen", me, myKey, open)
@@ -1637,6 +2110,20 @@ local function drawItem(it, alpha)
 		UiText(def and def.name or invPrettyId(it.id))
 	end
 	UiPop()
+	if def and def.takes and (it.ammo or 0) > 0 then              -- a loaded gun: its ammo's icon, small, bottom left
+		local l = C.defs[invLoadOf(it)]
+		local aicon = l and iconOf(l)
+		if aicon then
+			UiPush()
+			local w, h = UiGetImageSize(aicon)
+			UiTranslate(3, CELL - 3)
+			UiAlign("left bottom")
+			UiScale(22 / math.max(w, h, 1))
+			UiColor(1, 1, 1, alpha)
+			UiImage(aicon)
+			UiPop()
+		end
+	end
 	local label = nil
 	if def and def.kind == "tool" and it.ammo then label = tostring(math.ceil(it.ammo)) end
 	if it.n and it.n > 1 then label = tostring(it.n) end
@@ -1739,8 +2226,95 @@ local function drawCell(ref, x, y, hint, num)
 	return over and ref or nil
 end
 
-function Inv.clientDraw()
+-- the wallet dragged out of the window, then a slider for how much gold to drop (screen coordinates, after the window)
+panelRect = {0, 0, 0, 0}
+function invGoldUi(me)
+	if not myMoney or myMoney < 1 or not open then goldDrag, goldDialog = false, nil return end
+	local mx, my = UiGetMousePos()
+	if goldDrag then
+		UiPush()
+		UiTranslate(mx, my)
+		UiAlign("center middle")
+		UiScale(44 / 64)
+		UiImage("MOD/images/coin.png")
+		UiPop()
+		if not InputDown("lmb") then
+			goldDrag = false
+			local r = panelRect
+			if mx < r[1] or my < r[2] or mx > r[1] + r[3] or my > r[2] + r[4] then
+				goldDialog = {n = math.max(1, math.floor(myMoney / 2))}
+			end
+		end
+		return
+	end
+	local d = goldDialog
+	d.n = math.max(1, math.min(myMoney, d.n))
+	local W, H = 560, 230
+	UiPush()
+	UiTranslate(UiCenter() - W / 2, UiMiddle() - H / 2)
+	UiAlign("left top")
+	UiColor(0.03, 0.04, 0.05, 0.96)
+	UiRect(W, H)
+	UiColor(1, 0.85, 0.35, 0.8)
+	UiRectOutline(W, H, 2)
+	UiPush()
+	UiTranslate(30, 26)
+	UiColor(1, 1, 1, 0.95)
+	UiFont("bold.ttf", 30)
+	UiText("DROP GOLD")
+	UiPop()
+	UiPush()                                                          -- the amount
+	UiTranslate(W - 30, 42)
+	drawGold(d.n, 30, "right")
+	UiPop()
+	local bx, by, bw = 40, 110, W - 80                                -- the slider
+	UiPush()
+	UiTranslate(bx, by)
+	UiColor(0.2, 0.22, 0.25, 1)
+	UiRect(bw, 8)
+	local f = myMoney > 1 and (d.n - 1) / (myMoney - 1) or 1
+	UiColor(1, 0.85, 0.35, 1)
+	UiRect(bw * f, 8)
+	UiTranslate(bw * f, 4)
+	UiAlign("center middle")
+	UiRect(18, 30)
+	UiPop()
+	UiPush()
+	UiTranslate(bx - 10, by - 20)
+	if UiIsMouseInRect(bw + 20, 48) and InputDown("lmb") then
+		local lx = UiGetMousePos()
+		local u = math.max(0, math.min(1, (lx - 10) / bw))
+		d.n = math.max(1, math.floor(1 + u * (myMoney - 1) + 0.5))
+	end
+	UiPop()
+	local function button(x, label, w)
+		UiPush()
+		UiTranslate(x, H - 66)
+		local over = UiIsMouseInRect(w, 42)
+		UiColor(1, 0.85, 0.35, over and 1 or 0.6)
+		UiRoundedRectOutline(w, 42, 6, 2)
+		UiTranslate(w / 2, 21)
+		UiAlign("center middle")
+		UiColor(1, 1, 1, 0.95)
+		UiFont("bold.ttf", 22)
+		UiText(label)
+		UiPop()
+		return over and InputPressed("lmb")
+	end
+	if button(40, "-", 50) then d.n = d.n - math.max(1, math.floor(myMoney / 20)) end
+	if button(100, "+", 50) then d.n = d.n + math.max(1, math.floor(myMoney / 20)) end
+	if button(160, "ALL", 80) then d.n = myMoney end
+	if button(W - 300, "CANCEL", 120) then goldDialog = nil end
+	if button(W - 170, "DROP", 130) then
+		ServerCall("server.invDropGold", me, myKey, d.n)
+		goldDialog = nil
+	end
+	UiPop()
+end
+
+local function invDrawMain()
 	local me = GetLocalPlayer()
+	if invBlocked(me) then return end                                -- (inventory.block: nothing of ours on screen)
 	if noteT > 0 then
 		UiPush()
 		UiTranslate(UiCenter(), UiHeight() - 220)
@@ -1770,6 +2344,17 @@ function Inv.clientDraw()
 				UiPush()
 				UiTranslate(UiWidth() - 36, UiHeight() - 36 - 54)
 				drawGold(myMoney, 26, "right")
+				UiPop()
+			end
+			local boostLeft = GetInt("inventory.boost." .. me)       -- BlueTide's seconds, over the gold
+			if boostLeft > 0 then
+				UiPush()
+				UiTranslate(UiWidth() - 36, UiHeight() - 36 - 54 - 40)
+				UiAlign("right middle")
+				UiFont("bold.ttf", 24)
+				UiColor(0.45, 0.7, 1, 1)
+				UiTextOutline(0, 0, 0, 0.8, 0.2)
+				UiText((C.defs.bluetide and C.defs.bluetide.name or "BlueTide") .. "  " .. math.floor(boostLeft / 60) .. ":" .. string.format("%02d", boostLeft % 60))
 				UiPop()
 			end
 			local pad = LastInputDevice() == INV_PAD
@@ -1811,47 +2396,103 @@ function Inv.clientDraw()
 	local leftW = math.max(avX - PAD + avW + 20 + 150, C.HOTBAR * step - GAP - 60 - gridW)
 	local hasStore = #storeList > 0
 	if GetBool("inventory.test.store") then storeOpen = true end    -- (autotests)
+	if GetInt("inventory.test.storecat") > 0 then storeCat, storePage = GetInt("inventory.test.storecat"), 1 end
 	if not hasStore then storeOpen = false end
-	local storeW = STORE_COLS * step - GAP
-	local W = PAD + leftW + 60 + gridW + PAD + (storeOpen and (60 + storeW) or 0)
+	-- the store is a tab in place of the equipment (the user, 2026-11-15: "so it saves space"): as many columns as fit
+	-- the player's panel, and rows over the grid's height less the page row
+	local storeCols = math.max(1, math.floor((leftW + GAP) / step))
+	local CAT_H = 46                                                 -- the store's category tabs, over its cells
+	local storeRows = math.max(1, math.floor((gridH - 18 - CAT_H) / (step + 22)))
+	local storeW = storeCols * step - GAP
+	local W = PAD + leftW + 60 + gridW + PAD
 	local top = 70
 	local hy = top + gridH + 46                                      -- the hotkey row
 	local H = hy + CELL + 52 + PAD
 	local x0, y0 = UiCenter() - W / 2, UiMiddle() - H / 2
+	panelRect = {x0, y0, W, H}
 	local hover = nil
-	avatar = {cx = x0 + avX + avW / 2, cy = y0 + top + avH / 2, h = avH, sw = UiWidth(), sh = UiHeight()}
-	avatarMeasure(me)
+	if storeOpen then
+		avatar = nil                                                 -- (no window: the store covers it)
+	else
+		avatar = {cx = x0 + avX + avW / 2, cy = y0 + top + avH / 2, h = avH, sw = UiWidth(), sh = UiHeight()}
+		avatarMeasure(me)
+	end
 
 	UiPush()
 	UiTranslate(x0, y0)
 	UiAlign("left top")
 	-- the panel, with a window in it: the camera looks at my own character through it (Inv.clientTick)
 	UiColor(0.03, 0.04, 0.05, 0.9)
-	UiRect(W, top)
-	UiPush() UiTranslate(0, top) UiRect(avX, avH) UiPop()
-	UiPush() UiTranslate(avX + avW, top) UiRect(W - avX - avW, avH) UiPop()
-	UiPush() UiTranslate(0, top + avH) UiRect(W, H - top - avH) UiPop()
-	UiPush()
-	UiTranslate(avX, top)
-	UiColor(0.28, 0.31, 0.34, 1)
-	UiRectOutline(avW, avH, 1)
-	UiPop()
+	if storeOpen then
+		UiRect(W, H)
+	else
+		UiRect(W, top)
+		UiPush() UiTranslate(0, top) UiRect(avX, avH) UiPop()
+		UiPush() UiTranslate(avX + avW, top) UiRect(W - avX - avW, avH) UiPop()
+		UiPush() UiTranslate(0, top + avH) UiRect(W, H - top - avH) UiPop()
+		UiPush()
+		UiTranslate(avX, top)
+		UiColor(0.28, 0.31, 0.34, 1)
+		UiRectOutline(avW, avH, 1)
+		UiPop()
+	end
 	local inPanel = UiIsMouseInRect(W, H)
 
-	-- headers
+	-- headers: the player's panel has two tabs, EQUIPMENT and STORE (a click, or the controller's menu_next)
+	local function tab(x, label, on)
+		UiPush()
+		UiTranslate(x, 22)
+		UiFont("bold.ttf", 30)
+		local w = UiGetTextSize(label)
+		local over = UiIsMouseInRect(w, 34)
+		UiColor(1, 1, 1, on and 0.95 or (over and 0.75 or 0.4))
+		UiText(label)
+		if on then
+			UiTranslate(0, 36)
+			UiColor(0.45, 0.68, 0.85, 1)
+			UiRect(w, 3)
+		end
+		UiPop()
+		return w, over and InputPressed("lmb") and not drag
+	end
+	local tw, hit = tab(PAD, "EQUIPMENT", not storeOpen)
+	if hit then storeOpen = false end
+	if hasStore then
+		local _, hit2 = tab(PAD + tw + 36, "STORE", storeOpen)
+		if hit2 then storeOpen = true end
+		if padMode and InputPressed("menu_next") and not drag then storeOpen = not storeOpen end
+	end
 	UiColor(1, 1, 1, 0.95)
 	UiFont("bold.ttf", 30)
-	UiPush()
-	UiTranslate(PAD, 22)
-	UiText(string.upper(GetPlayerName(me)))
-	UiPop()
+	if IsPlayerHost() and shared.invKeep == "session" and myKey then   -- the host's "New session" (inv_keep.lua)
+		local asking = resetAsk and GetTime() < resetAsk
+		UiPush()
+		UiTranslate(PAD + leftW + 60 + gridW - 170, 18)
+		local over = UiIsMouseInRect(170, 38)
+		if asking then UiColor(0.95, 0.35, 0.3, 1) else UiColor(0.6, 0.62, 0.66, over and 1 or 0.55) end
+		UiRoundedRectOutline(170, 38, 6, 2)
+		UiTranslate(85, 19)
+		UiAlign("center middle")
+		UiFont("bold.ttf", 20)
+		UiColor(1, 1, 1, 0.95)
+		UiText(asking and "RESET ALL?" or "NEW SESSION")
+		UiPop()
+		if over and not drag and InputPressed("lmb") then
+			if asking then
+				resetAsk = nil
+				ServerCall("server.invNewSession", me, myKey)
+			else
+				resetAsk = GetTime() + 3
+			end
+		end
+	end
 	UiPush()
 	UiTranslate(PAD + leftW + 60, 22)
 	UiText("INVENTORY")
 	UiPop()
 
 	-- equipment: the slots head to feet, left of the avatar (a mod's extra slots in further columns)
-	for i = 1, nSlots do
+	for i = 1, storeOpen and 0 or nSlots do
 		local slot = C.SLOTS[i]
 		local col, row = math.floor((i - 1) / eRows), (i - 1) % eRows
 		hover = drawCell("e:" .. slot, PAD + col * step, top + row * step, SLOT_NAMES[slot] or slot) or hover
@@ -1859,7 +2500,7 @@ function Inv.clientDraw()
 	-- what is worn adds up to, right of the avatar
 	local st = C.stats(mine)
 	local lines = {{"DEFENCE", math.floor(st.defense * 100 + 0.5) .. "%"}, {"MOBILITY", pctText(st.mobility - 1, true)}, {"NOISE", pctText(st.noise - 1, true)}}
-	for i = 1, #lines do
+	for i = 1, storeOpen and 0 or #lines do
 		UiPush()
 		UiTranslate(avX + avW + 20, top + (i - 1) * 96 + 8)
 		UiColor(1, 1, 1, 0.6)
@@ -1890,51 +2531,63 @@ function Inv.clientDraw()
 		hover = drawCell("g:" .. i, gx + col * step, top + row * step) or hover
 	end
 
-	-- gold, in the header (none: the store is free)
+	-- gold, in the header (none: the store is free); dragged out of the window: a slider for how much to drop
 	if myMoney then
 		UiPush()
-		UiTranslate(gx + 190, 37)
-		drawGold(myMoney, 24)
+		UiTranslate(gx + 175, 20)
+		local overGold = UiIsMouseInRect(170, 34)
+		if overGold and myMoney > 0 and not drag and not goldDialog and not padMode and InputPressed("lmb") then goldDrag = true end
+		UiTranslate(15, 17)
+		drawGold(myMoney, 24, nil, (overGold or goldDrag) and {1, 0.95, 0.6} or nil)
 		UiPop()
 	end
 
-	-- the store: a button in the header, then a column of what it sells beside the grid
+	-- the store tab: what it sells, in the player's panel
 	local buy = nil
 	local overSell = false                                           -- the dragged item is over the store, and it buys it
-	if hasStore then
-		UiPush()
-		UiTranslate(gx + gridW - 130, 18)
-		local over = UiIsMouseInRect(130, 38)
-		UiColor(0.45, 0.68, 0.85, (storeOpen or over) and 1 or 0.55)
-		UiRoundedRectOutline(130, 38, 6, 2)
-		UiTranslate(65, 19)
-		UiAlign("center middle")
-		UiColor(1, 1, 1, 0.95)
-		UiFont("bold.ttf", 22)
-		UiText(storeOpen and "STORE  <" or "STORE  >")
-		UiPop()
-		if ((over and InputPressed("lmb")) or (padMode and InputPressed("menu_next"))) and not drag then storeOpen = not storeOpen end
-	end
 	if storeOpen then
-		local sx = gx + gridW + 60
-		local per = STORE_COLS * STORE_ROWS
-		local pages = math.max(1, math.ceil(#storeList / per))
-		if padMode and InputPressed("menu_prev") then storePage = storePage % pages + 1 end
+		local sx = PAD
+		-- three categories (the user, 2026-11-15): weapons and tools / clothing / items, each with its own pages
+		local shown, counts = {}, {0, 0, 0}
+		for _, e in ipairs(storeList) do
+			local c = invStoreCat(e.id)
+			counts[c] = counts[c] + 1
+			if c == storeCat then shown[#shown + 1] = e end
+		end
+		local cx = sx
+		for c = 1, #STORE_CATS do
+			UiPush()
+			UiTranslate(cx, top)
+			UiFont("bold.ttf", 20)
+			local label = STORE_CATS[c]
+			local w = UiGetTextSize(label) + 24
+			local over = UiIsMouseInRect(w, 32)
+			local on = c == storeCat
+			UiColor(0.45, 0.68, 0.85, on and 1 or (over and 0.7 or 0.3))
+			UiRoundedRectOutline(w, 32, 6, on and 2 or 1)
+			UiTranslate(w / 2, 16)
+			UiAlign("center middle")
+			UiColor(1, 1, 1, on and 0.95 or (counts[c] > 0 and 0.6 or 0.25))
+			UiText(label)
+			UiPop()
+			if over and InputPressed("lmb") and not drag and not on then storeCat, storePage = c, 1 end
+			cx = cx + w + 10
+		end
+		local ctop = top + CAT_H
+		local per = storeCols * storeRows
+		local pages = math.max(1, math.ceil(#shown / per))
+		if padMode and InputPressed("menu_prev") then                -- (the controller: pages, then the next category)
+			if storePage < pages then storePage = storePage + 1 else storeCat, storePage = storeCat % #STORE_CATS + 1, 1 end
+		end
 		storePage = math.max(1, math.min(storePage, pages))
-		UiPush()
-		UiTranslate(sx, 22)
-		UiColor(1, 1, 1, 0.95)
-		UiFont("bold.ttf", 30)
-		UiText("STORE")
-		UiPop()
 		for k = 1, per do
-			local e = storeList[(storePage - 1) * per + k]
+			local e = shown[(storePage - 1) * per + k]
 			if e then
-				local col, row = (k - 1) % STORE_COLS, math.floor((k - 1) / STORE_COLS)
+				local col, row = (k - 1) % storeCols, math.floor((k - 1) / storeCols)
 				UiPush()
-				UiTranslate(sx + col * step, top + row * (step + 22))
+				UiTranslate(sx + col * step, ctop + row * (step + 22))
 				local skey = "s:" .. e.id
-				cells[#cells + 1] = {x = sx + col * step, y = top + row * (step + 22), key = skey}
+				cells[#cells + 1] = {x = sx + col * step, y = ctop + row * (step + 22), key = skey}
 				local over
 				if padMode then over = focus == skey else over = UiIsMouseInRect(CELL, CELL + 20) end
 				local can = not myMoney or myMoney >= e.price
@@ -1961,7 +2614,7 @@ function Inv.clientDraw()
 		if drag and myMoney then
 			UiPush()
 			UiTranslate(sx - 8, top - 8)
-			local zw, zh = storeW + 16, STORE_ROWS * (step + 22) + 8
+			local zw, zh = storeW + 16, CAT_H + storeRows * (step + 22) + 8
 			if not padMode then overSell = UiIsMouseInRect(zw, zh) else overSell = buy ~= nil end
 			UiColor(0.03, 0.04, 0.05, 0.88)
 			UiRect(zw, zh)
@@ -1980,7 +2633,7 @@ function Inv.clientDraw()
 		end
 		-- pages
 		UiPush()
-		UiTranslate(sx, top + STORE_ROWS * (step + 22) + 6)
+		UiTranslate(sx, ctop + storeRows * (step + 22) + 6)
 		UiFont("bold.ttf", 22)
 		local function pageButton(x, label, to)
 			UiPush()
@@ -2052,6 +2705,8 @@ function Inv.clientDraw()
 	-- what the player does with it: the mouse (drag and drop), or a controller (take with A, put with A)
 	if not myKey then
 		drag = nil                                                    -- (no key yet: nothing can be asked)
+	elseif goldDrag or goldDialog then                               -- gold: dragged, then the slider (drawn and handled
+		-- after the window, by invGoldUi: nothing else takes the mouse meanwhile)
 	elseif padMode then
 		if drag and not C.get(mine, drag) then drag = nil end
 		if InputPressed("menu_accept") then
@@ -2062,9 +2717,11 @@ function Inv.clientDraw()
 				ServerCall("server.invBuy", me, myKey, buy.id)
 			elseif drag then
 				if hover and hover ~= drag then ServerCall("server.invMove", me, myKey, drag, hover) end
+				if hover == drag then invClick(me, drag, myKey) end     -- (taken and put back: a click)
 				drag = nil
 			elseif hover and C.get(mine, hover) then
 				drag = hover
+				invClick(me, hover, myKey)
 			end
 		elseif InputPressed("interact") then
 			if drag then
@@ -2106,6 +2763,7 @@ function Inv.clientDraw()
 		elseif hover and C.get(mine, hover) then
 			if InputPressed("lmb") then
 				drag = hover
+				dragT, dragX, dragY = GetTime(), UiGetMousePos()
 			elseif InputPressed("rmb") then
 				ServerCall("server.invQuick", me, myKey, hover)
 			else
@@ -2126,6 +2784,7 @@ function Inv.clientDraw()
 			drawItem(it, 0.85)
 			UiPop()
 			if not InputDown("lmb") then
+				if hover == drag and math.abs(mx - dragX) + math.abs(my - dragY) < 10 then invClick(me, drag, myKey) end   -- (a click)
 				if overSell then
 					ServerCall("server.invSell", me, myKey, drag)
 				elseif hover and hover ~= drag then
@@ -2136,5 +2795,40 @@ function Inv.clientDraw()
 				drag = nil
 			end
 		end
+	end
+end
+
+-- the gold changes rising from the bottom right corner's gold and fading out (over the screen too: on top)
+local function drawMoneyFloats()
+	local now = GetTime()
+	local keep = {}
+	for _, f in ipairs(moneyFloats) do
+		local age = now - f.t
+		if age < INV_FLOAT_TIME then
+			keep[#keep + 1] = f
+			UiPush()
+			UiTranslate(UiWidth() - 36, UiHeight() - 36 - 54 - 30 - age * 50)
+			UiAlign("right middle")
+			UiFont("bold.ttf", 28)
+			local a = 1 - age / INV_FLOAT_TIME                       -- (fading from the start: the user)
+			if f.d > 0 then UiColor(0.35, 1, 0.4, a) else UiColor(1, 0.35, 0.3, a) end
+			UiTextOutline(0, 0, 0, 0.8 * a, 0.2)
+			UiText((f.d > 0 and "+" or "-") .. invGold(math.abs(f.d)))
+			UiPop()
+		end
+	end
+	moneyFloats = keep
+end
+
+function Inv.clientDraw()
+	if GetBool("inventory.test.golddialog") and not goldDialog and myMoney and myMoney > 0 then   -- (autotests)
+		goldDialog = {n = math.floor(myMoney / 2)}
+	end
+	invDrawMain()
+	if not invBlocked(GetLocalPlayer()) then drawMoneyFloats() end      -- (after the window: on top)
+	if (goldDrag or goldDialog) and not invBlocked(GetLocalPlayer()) then
+		UiPush()
+		invGoldUi(GetLocalPlayer())                                   -- (after the window: on top, screen coordinates)
+		UiPop()
 	end
 end

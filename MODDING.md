@@ -4,6 +4,8 @@ This guide is for modders who want their own mod's things to show up in the inve
 consumables, loot, clothing and armour. You do not edit the Inventory mod. Your mod stays its own mod and tells the
 inventory about its items.
 
+**Join the [Discord server](https://discord.gg/gNpRewdkxf)** if you make a mod for the inventory: it is in alpha, the API may still change, and API changes are announced there first.
+
 **The fastest start:** copy the folder `example pack` (next to this file) into `Documents/Teardown/mods`, enable it
 together with the Inventory mod, and look at what it does. It adds a bandage, a gold bar, a crowbar, a T-shirt, a
 cap and a frying pan, one short file per kind of thing. Then keep the files you need, rename things and replace
@@ -18,6 +20,7 @@ its models and pictures with yours.
 | loot, keys, quest items, money bags | [A plain item](#a-plain-item) | nothing else |
 | clothing or armour you can SEE on the character | [Clothing](#clothing-and-armour) | one file to copy |
 | a melee weapon with a swing (sword, axe) | [Melee weapons](#melee-weapons) | one file to copy |
+| a game mode where some players have no inventory, or tools of its own | [Game modes](#game-modes-players-without-an-inventory-and-tools-of-your-own) | nothing else |
 
 Everything here needs only the Inventory mod. No other mod has to be installed.
 
@@ -50,12 +53,18 @@ every two seconds.
 
 ## A tool or weapon
 
-Every tool that any mod registers is an inventory item automatically. If your mod already has a working tool, you
-are done: it can be picked up, dropped, put on a hotkey and sold in the store.
+The Inventory is empty by itself: a tool is an inventory item only when a mod **declares** it, and every tool that
+is not declared is taken from the players (also the game's own: the McPuppet Basic Tools and Guns Packs declare
+those). Declare yours on every machine with `inventory.tools.<your tool id>` (or any key under it); then it can be
+picked up, dropped, put on a hotkey and sold in the store.
 
 ```lua
 function server.init()
     RegisterTool("mymod_crowbar", "Crowbar", "MOD/vox/crowbar.vox", 1)
+    SetBool("inventory.tools.mymod_crowbar", true)      -- an inventory item
+end
+function client.init()
+    SetBool("inventory.tools.mymod_crowbar", true)      -- (every machine: names and icons)
 end
 ```
 
@@ -69,6 +78,8 @@ Optional extras, set on every machine (`inventory.tools.<your tool id>.<key>`):
 | `.price` | int | What the store asks. `-1` = not sold. Without it: 1000. |
 | `.ammo` | int | The tool uses ammo: one item is a pack of this many. The count is shown on the item and goes down as it is used. Without it the tool needs no ammo. |
 | `.spent` | bool | `true` = the item disappears when its last one is used (a grenade). `false` = it stays, empty (a gun). |
+| `.takes` | string | A gun: the ammo items it is loaded with, `"mymod_ammo_a mymod_ammo_b"` (below). |
+| `.tip` | string | Extra tooltip lines, `"line one|line two"` (e.g. a magazine size). |
 
 ```lua
 SetString("inventory.tools.mymod_crowbar.icon", "icons/crowbar.png")
@@ -92,6 +103,10 @@ SetInt("inventory.items.mymod_bandage.price", 40)                     -- leave o
 SetString("inventory.items.mymod_bandage.icon", "icons/bandage.png")
 SetString("inventory.items.mymod_bandage.drop", "vox/bandage.vox")
 ```
+
+A speed boost needs no script: `.boost` = the share added to walking speed and jump (0.15 = 15 % faster) for
+`.boostTime` seconds; more of it adds time (at most 2 minutes). `.model` = a game tool whose model it lies in the world
+as (e.g. `"steroid"`, the game's bottle), instead of `.drop`.
 
 **Doing your own thing when it is used** (a speed boost, a spawn, a sound). Leave `.heal` out and watch the "used"
 list on the host. Each use adds one entry and raises the counter `inventory.used.last`:
@@ -193,13 +208,46 @@ Players buy from the store column in the inventory screen, with gold coins.
   the money). An item without a price cannot be sold. The host can change the share:
   `SetFloat("inventory.sell", 0.5)`, or `0` for no selling.
 - **Money is gold coins**, the inventory's own: one number per player on the host, `inventory.gold.<player>`,
-  shown in the bottom right corner of the screen and in the inventory. Every player starts with 500. The store takes the price from it and pays sales into it. Your mod can reward or charge a player
-  with it; read it back each time, never keep a copy:
+  shown in the bottom right corner of the screen and in the inventory. Every player starts with 500. The store
+  takes the price from it and pays sales into it. Read it, but don't write it yourself: a player who never used the
+  store has no wallet key yet, and two scripts writing it in one tick race each other.
+- **Paying or taking gold:** append changes to `inventory.goldadd.<player>` on the host, `"n[:reason] ..."` with a
+  signed whole number. The inventory reads and clears it every tick, makes the wallet first if it is missing, never
+  goes below 0, saves it with the player's inventory, and shows a note ("+150 gold: Round won"; write the reason
+  with `_` for spaces). It works while the player is blocked too (no note then).
 
   ```lua
-  local k = "inventory.gold." .. player
-  SetInt(k, GetInt(k) + 50, true)      -- 50 gold coins for the player
+  local k = "inventory.goldadd." .. player
+  local s = GetString(k)
+  SetString(k, s == "" and "150:Round_won" or s .. " 150:Round_won")   -- 150 gold coins for the player
   ```
+- **Selling things of your own for gold** (a shop your mod draws): append `"token:n[:reason]"` to
+  `inventory.spend.<player>` on the host. Each entry is all or nothing: paid when the player has at least `n`, else
+  nothing; the answer is `inventory.spent.<token>` = `"ok"` or `"no"` (clear it after reading). Entries are taken in
+  order, so of two that don't both fit only the first is paid. Works while the player is blocked.
+- **Every player has a wallet** (`inventory.gold.<player>`) as soon as the inventory sees them (not with
+  `inventory.free`), so you can show the balance before their first purchase.
+- **Gold in the world**: gold can lie on the ground (a coin, coins, a pouch or pouches, by amount) and players pick
+  it up with E into their wallet. Players drop it from the inventory (drag the gold out of the window), a share falls
+  where a player dies (the mod's option, 20 % by default; a game mode can set `inventory.deathloss` = 0..1 on the
+  host), and **your mod can drop some**, e.g. when a monster is killed: append `"x,y,z,amount"` to
+  `inventory.dropgold` on the host (several separated by spaces); the inventory spawns it there and clears the key.
+
+  ```lua
+  -- my monster died at pos: it drops 75 gold (only when the Inventory runs)
+  if GetBool("inventory.present") then
+      local s = GetString("inventory.dropgold")
+      SetString("inventory.dropgold", (s == "" and "" or s .. " ") .. string.format("%.2f,%.2f,%.2f,%d", pos[1], pos[2], pos[3], 75))
+  end
+  ```
+- **Is the inventory there?** `GetBool("inventory.present")` is true while it runs (set again every second).
+- **The key that opens the inventory**: `inventory.key.open` (on every machine), e.g. to open your own screen on it.
+- **Is the inventory screen open?** `GetBool("inventory.screenopen")` on that player's own machine (local, not
+  synced): skip your name tags, speech bubbles and other world labels while it is true, so they don't draw over it.
+- **How long kept inventories last**: `inventory.keep` (synced) is the host's option, `"session"` (kept through map
+  and mode changes until the host's NEW SESSION) or `"map"` (every map or mode change starts everyone empty).
+  `inventory.session` (synced) changes whenever they start over (NEW SESSION; with `"map"`, every map). Keep your own
+  per-player things with it and drop them when it changes.
 - A map or game mode can switch the store off (`SetInt("inventory.store", 0)`) or make everything free
   (`SetBool("inventory.free", true)`), both on the host.
 
@@ -283,6 +331,48 @@ the limit.
 
 The prefab, the model, the optional fields and the custom swing are in `MODDING_WEAPONS.md`, next to this file,
 with a working frying pan in the `example pack` folder.
+
+## Game modes: players without an inventory, and tools of your own
+
+Two host keys, for game modes (both read every tick, so set or clear them whenever roles change):
+
+| Key | What it does |
+|---|---|
+| `inventory.block.<player>` (bool, synced) | The inventory is **off** for that player: no inventory screen, hotbar or gold on their screen, no picking up, no punch, no store, no consumables, and worn clothing has no effect (no armour, mobility or noise; the character shows its own look). The inventory leaves their tool wheel alone. Everything they carry, wear and own in gold is **kept** (not dropped, not even at death) and comes back when the key is false or cleared. A missing key means not blocked. |
+| `inventory.keepondeath` (bool) | Nobody loses anything at death: items, worn clothing and gold all stay with the player (no drop, no gold share). Missing: the usual death drop. |
+| `inventory.keeptools = "id id ..."` | Tool ids the inventory **never touches**: they are not items, and it never enables, disables or puts them away. Your mode hands them out (`SetToolEnabled`, `SetToolAmmo`) and takes them back itself, for everyone. |
+
+```lua
+-- a monster this round: no inventory; a human next round: theirs back
+SetBool("inventory.block." .. p, true, true)
+ClearKey("inventory.block." .. p)
+-- the mode's own tools, managed by the mode
+SetString("inventory.keeptools", "mymode_goo mymode_noisemaker", true)
+```
+
+## Guns, ammo and reloading
+
+A gun can hold rounds of separate **ammo items**: give the gun `inventory.tools.<gun>.takes = "<ammo id> ..."` and
+define the ammo as an item of kind `"ammo"` (`inventory.items.<id>.kind = "ammo"`, with `.box` = how many one
+purchase gives and `.price` for that box). A player drags an ammo stack onto the gun to load it and double-clicks the
+gun to unload it; the gun stays when empty and is sold empty. The game's ammo count follows the rounds.
+
+**Magazines and reloading belong to the gun's mod** (the McPuppet Basic Guns Pack has the game's guns'). The
+inventory gives you, on the host:
+
+| Key | |
+|---|---|
+| `inventory.ammo.<player>.<gun>` | the rounds loaded in that player's gun (while it is on a hotkey) |
+| `inventory.shots.<player>.<gun>` | rounds used from it so far (a counter: compare with the last value you saw) |
+| `inventory.cap.<player>.<gun>` = n | **you write it**: at most n rounds can be fired now (your magazine); 0 while you reload. The game's count becomes that (less the shots since you last changed it). Without it the game's count is all the rounds. |
+
+A magazine is then: count the shots off it, write it as the cap, and when it is empty (or on your reload key) write
+0 for the reload's time, then refill it from the rounds.
+
+**A tool of your own that burns ammo or fuel by itself** (not by the game's shots, e.g. a scripted torch): add what
+it used to `inventory.use.<player>.<tool>` (a float, on the host). The inventory takes that off the tool's loaded
+ammo and clears the key every tick; read `inventory.ammo.<player>.<tool>` to know when it is empty. The McPuppet
+Basic Tools Pack's blowtorch does this with its fuel.
 
 ## For mods that react to the player's gear
 

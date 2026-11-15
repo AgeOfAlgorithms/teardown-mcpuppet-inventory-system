@@ -126,8 +126,9 @@ end
 -- (0 = all taken).
 -- Tools: a second one of the same tool adds its ammo to the first; else a grid cell, and the first free hotkey
 -- points at it.
--- Clothing: worn at once when its slot is empty, else into the grid. Stackables fill their stacks first.
-function C.add(inv, id, n, ammo)
+-- Clothing: worn at once when its slot is empty (not with noWear: a purchase, the user 2026-11-15 "don't auto equip
+-- items when bought"), else into the grid. Stackables fill their stacks first.
+function C.add(inv, id, n, ammo, noWear)
 	local def = C.defs[id]
 	n = n or 1
 	if not def or n < 1 then return n end
@@ -140,12 +141,16 @@ function C.add(inv, id, n, ammo)
 		end
 		local i = firstFree(inv.g, C.GRID)
 		if not i then return n end
-		inv.g[i] = {id = id, n = 1, ammo = ammo}
+		if def.takes then                                            -- a gun: its loaded rounds (0: empty, never "unlimited")
+			inv.g[i] = {id = id, n = 1, ammo = ammo or 0, load = (ammo or 0) > 0 and def.takes[1] or nil}
+		else
+			inv.g[i] = {id = id, n = 1, ammo = ammo}
+		end
 		local k = firstFree(inv.h, C.HOTBAR)
 		if k then inv.h[k] = i end
 		return 0
 	end
-	if def.kind == "clothing" and def.slot and inv.e[def.slot] == nil and isSlot(def.slot) then
+	if not noWear and def.kind == "clothing" and def.slot and inv.e[def.slot] == nil and isSlot(def.slot) then
 		inv.e[def.slot] = {id = id, n = 1}
 		n = n - 1
 	end
@@ -316,7 +321,7 @@ end
 function C.copy(inv)
 	local function area(t)
 		local o = {}
-		for k, it in pairs(t) do o[k] = {id = it.id, n = it.n, ammo = it.ammo} end
+		for k, it in pairs(t) do o[k] = {id = it.id, n = it.n, ammo = it.ammo, load = it.load} end
 		return o
 	end
 	local h = {}

@@ -111,6 +111,40 @@ local function meleeHitEvent(e, p, w, sh, body, at, d)
 	SetInt("inventory.melee.hit.last", meleeHitN)
 end
 
+-- (added by the Inventory session, 2026-11-15, announced: the bare-hand punch in inv.lua publishes the same event -
+-- the Villagers session asked, for the user) one hit with given numbers, on the same ring and counters; swing nil: a
+-- fresh swing number. -> the swing number used
+function InventoryMeleeEvent(p, sh, body, at, d, weaponId, power, knockback, swing)
+	for _, v in ipairs(GetAllPlayers()) do
+		for _, b in ipairs(GetPlayerBodies(v) or {}) do
+			if b == body then return swing end
+		end
+	end
+	if not swing then
+		meleeSwingN = meleeSwingN + 1
+		swing = meleeSwingN
+	else
+		meleeSwingN = math.max(meleeSwingN, swing)                   -- (no later swing reuses a caller's number)
+	end
+	meleeHitN = meleeHitN + 1
+	local k = "inventory.melee.hit." .. (meleeHitN % 16) .. "."
+	SetInt(k .. "shape", sh)
+	SetInt(k .. "body", body)
+	SetFloat(k .. "x", at[1])
+	SetFloat(k .. "y", at[2])
+	SetFloat(k .. "z", at[3])
+	SetInt(k .. "attacker", p)
+	SetString(k .. "weapon", weaponId)
+	SetFloat(k .. "power", power)
+	SetFloat(k .. "knockback", knockback)
+	SetFloat(k .. "dir.x", d[1])
+	SetFloat(k .. "dir.y", d[2])
+	SetFloat(k .. "dir.z", d[3])
+	SetInt(k .. "swing", swing)
+	SetInt("inventory.melee.hit.last", meleeHitN)
+	return swing
+end
+
 function WeaponsServerInit()
 	svReady, svPending, svSeen = {}, {}, {}
 	ClearKey("inventory.melee.hit")

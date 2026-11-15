@@ -272,7 +272,8 @@ end
 
 local function start(id, def)
 	local ents
-	if def.kind == "tool" and def.tool then ents = SpawnTool(def.tool, Transform(AWAY)) end
+	local model = def.kind == "tool" and def.tool or def.model          -- (a consumable with a game tool's model: BlueTide)
+	if model then ents = SpawnTool(model, Transform(AWAY)) end
 	if (not ents or #ents == 0) and def.drop and def.drop ~= "" then
 		ents = Spawn("<body><vox file='" .. def.drop .. "'/></body>", Transform(AWAY))
 	end
