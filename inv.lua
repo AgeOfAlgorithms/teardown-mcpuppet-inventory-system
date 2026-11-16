@@ -37,6 +37,8 @@
 --                                                        back each time, never keep a copy. Every player starts
 --                                                        with INV_GOLD_START
 --   inventory.free = true                                (host) the store asks no money
+--   inventory.scatter = false                           (host) a game mode's: no gold lying around the map (the
+--                                                        mod's option; inv_scatter.lua) - the piles out are removed
 --   inventory.consumables = false                       (host) a game mode's: consumables can't be used (a note, the
 --                                                        item kept) and running speed boosts end; unset or true: allowed
 --   inventory.healing = false                           (host) a game mode's: consumables that heal can't be used (a
@@ -1323,6 +1325,8 @@ function Inv.serverTick(dt)
 			end
 		end
 	end
+	InvScatter.serverTick(dt, function(n, t) return spawnItem({id = INV_GOLD_ITEM, n = n}, t) end,   -- gold lying around the map
+		function(b) return world[b] == nil or not IsHandleValid(b) end, removeWorld)
 	local here = {}
 	for _, p in ipairs(GetAllPlayers()) do
 		here[p] = true

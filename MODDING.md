@@ -358,6 +358,7 @@ Two host keys, for game modes (both read every tick, so set or clear them whenev
 | `inventory.keepondeath` (bool) | Nobody loses anything at death: items, worn clothing and gold all stay with the player (no drop, no gold share). Missing: the usual death drop. |
 | `inventory.consumables` = false | No consumables: using one shows "Not in this game mode" and keeps the item; running speed boosts end. Missing or true: allowed. |
 | `inventory.healing` = false | No healing: a consumable that heals shows "No healing in this game mode" and is kept; other consumables (speed boosts) work. Missing or true: allowed. |
+| `inventory.scatter` = false | No gold lying around the map (the mod's option "Gold lying around the map", on by default: piles of 1-20 up to 500 in all, back 60 s after they are taken). The piles out are removed. Missing or true: the host's option decides. |
 | `inventory.armored.<player>` = true | Set it in the tick your mode changes that player's health (`SetPlayerHealth`) by an amount you already took the armour off (`inventory.stat.<player>.defense`): the armour gives nothing back for that change. Cleared by the inventory. Without it, a health loss gets the armour's share back. |
 | `inventory.keeptools = "id id ..."` | Tool ids the inventory **never touches**: they are not items, and it never enables, disables or puts them away. Your mode hands them out (`SetToolEnabled`, `SetToolAmmo`) and takes them back itself, for everyone. |
 

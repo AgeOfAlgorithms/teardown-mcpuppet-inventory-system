@@ -12,6 +12,7 @@
 #include "inv.lua"
 #include "inv_color.lua"
 #include "inv_keep.lua"
+#include "inv_scatter.lua"
 
 -- (test builds add their modules here)
 
