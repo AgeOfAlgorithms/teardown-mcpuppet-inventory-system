@@ -6,12 +6,12 @@
 -- A pile picked up frees its amount again after the respawn time; a pile nobody took for MOVE_AFTER seconds is put
 -- somewhere else (one on a roof nobody reaches would block its share of the cap for good).
 -- Settings (the host's mod options, savegame.mod.*): scatter (on unless false), scattermin 1, scattermax 20,
--- scattercap 500, scatterrespawn 60 (s). A game mode switches it off with inventory.scatter = false (its piles go).
+-- scattercap 300 (500 at first; the user 2026-11-16: 300), scatterrespawn 60 (s). A game mode switches it off with inventory.scatter = false (its piles go).
 
 InvScatter = {}
 
 local MOVE_AFTER = 600          -- s a pile may lie before it moves elsewhere
-local PER_STEP = 4              -- piles spawned at most per step (0.25 s): the first fill of 500 takes ~3 s
+local PER_STEP = 4              -- piles spawned at most per step (0.25 s): the first fill of 300 takes ~2 s
 local TRIES = 10                -- vertical lines tried per pile
 local pieces = {}               -- body -> {n = gold, t = when it was put}
 local waits = {}                -- {t = when the amount is free again, n = gold}
@@ -31,7 +31,7 @@ function InvScatter.settings()
 	end
 	local mn, mx = int("scattermin", 1, 1, 1000), int("scattermax", 20, 1, 1000)
 	if mn > mx then mn, mx = mx, mn end
-	return {min = mn, max = mx, cap = int("scattercap", 500, 0, 100000), respawn = int("scatterrespawn", 60, 0, 3600)}
+	return {min = mn, max = mx, cap = int("scattercap", 300, 0, 100000), respawn = int("scatterrespawn", 60, 0, 3600)}
 end
 
 -- a floor somewhere on the map: a random vertical line, every floor on it with 1.9 m of room above, one of them

@@ -2,7 +2,7 @@
 -- inventory). savegame.mod.keep: "" / "session" = inventories and gold carry over to the next map and the next session
 -- until the host presses New session in the inventory; "map" = every map or mode change starts everyone empty.
 -- Two columns: inventories, death and starting gold on the left; gold lying around the map on the right
--- (inv_scatter.lua, the user 2026-11-16: on by default, 1-20 a pile, 500 at most, a respawn time).
+-- (inv_scatter.lua, the user 2026-11-16: on by default, 1-20 a pile, 300 at most (500 at first), a respawn time).
 
 local CHOICES = {
 	{"session", "Keep", "Inventories and gold carry over to the next map, game mode and session. The host resets them with NEW SESSION in the inventory screen."},
@@ -85,7 +85,7 @@ local function right()
 	UiTranslate(0, 70)
 	intRow("Smallest pile", "savegame.mod.scattermin", {1, 2, 5, 10, 25}, 1, tostring, nil)
 	intRow("Largest pile", "savegame.mod.scattermax", {5, 10, 20, 50, 100}, 20, tostring, "Each pile holds a random amount between the two.")
-	intRow("Total lying out", "savegame.mod.scattercap", {100, 250, 500, 1000, 2000}, 500, tostring, "No more gold than this lies around at once.", 130)
+	intRow("Total lying out", "savegame.mod.scattercap", {100, 300, 500, 1000, 2000}, 300, tostring, "No more gold than this lies around at once.", 130)
 	intRow("Comes back after", "savegame.mod.scatterrespawn", {30, 60, 120, 300}, 60,
 		function(v) return v < 60 and v .. " s" or (v / 60) .. " min" end, "The time before a pile someone took lies out again.", 130)
 end
