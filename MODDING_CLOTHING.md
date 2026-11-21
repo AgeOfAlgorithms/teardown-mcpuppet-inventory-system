@@ -85,7 +85,7 @@ Tip for colours: the example clothes use palette slots 153 to 168 for cloth and 
 InventoryClothing({
 	id = "mymod_jacket",                      -- unique; no dots or spaces; start it with your mod's name
 	name = "Leather Jacket",
-	slot = "top",                             -- head, top, legs or feet
+	slot = "top",                             -- head, top, back, legs or feet
 	layer = 1,                                -- 1 = on the skin, 2 = worn over other clothes (helmets, vests)
 	vox = "MOD/vox/jacket.vox",
 	parts = "chest stomach shoulder_l shoulder_r arm_upper_l arm_upper_r arm_lower_l arm_lower_r",
@@ -93,6 +93,7 @@ InventoryClothing({
 	tint = true,                              -- keep this for everything made from template.vox
 	armor = 0.10,                             -- 0 to 1: the share of a hit it blocks
 	mobility = 0,                             -- -0.10 = 10 % slower and lower jumps, 0.05 = 5 % faster
+	swim = 0,                                 -- in water instead of mobility: 0.5 = swims 50 % faster (flippers)
 	noise = 0.05,                             -- 0.35 = 35 % louder steps, -0.25 = quieter
 	type = "clothing.upper.jacket",           -- a tag other mods can read
 	price = 250,                              -- what the store asks; -1 = not for sale; leave out = the store decides
@@ -122,8 +123,12 @@ What the fields mean:
   in `parts`: the body underneath is then not drawn, and your object must hold the whole part, skin included. For a
   piece that only adds something (a hat, a shoulder pad on its own), leave the part out of `covers` and keep only
   the added voxels in the object.
-- **`slot`**: a player wears one item per slot. `top` is the upper body, `legs` the lower body.
+- **`slot`**: a player wears one item per slot. `top` is the upper body, `back` a backpack or other gear carried on the back (layer 2 over
+  the chest part, with `covers` left empty so the clothes under it still show), `legs` the lower body.
 - **`layer`**: a layer 2 item hides the parts of layer 1 items it covers (a vest over a shirt).
+  Gear worn over everything, such as an air tank on the back, takes layer 3 so no vest hides it.
+- **`rigid`** (optional): `true` keeps the parts as painted instead of reshaping them to the wearer (a steel tank,
+  anything that must not bend or stretch). They still move with the bone, at the template part's place on that player.
 - **`tint`**: `true` makes the white skin voxels take the wearer's skin colour. It needs the objects to be on a
   MagicaVoxel layer named `$TINT`. Every object of the template already is, so keep `tint = true` for anything
   made from the template, with or without skin in it.

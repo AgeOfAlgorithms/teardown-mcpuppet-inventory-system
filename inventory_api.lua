@@ -10,17 +10,23 @@
 --
 -- The step-by-step guides are MODDING_CLOTHING.md and MODDING_WEAPONS.md in the Inventory mod's folder; "example
 -- pack" there is a mod to copy.
--- slot:   head, top (upper body), legs (lower body) or feet: one item per slot per player.
+-- slot:   head, top (upper body), back (a backpack, gear carried on the back), legs (lower body) or feet: one item
+--         per slot per player.
 -- vox:    one .vox, one object per body part it has, named after the part (chest, arm_upper_l ...) and painted in
 --         the template grid of that part (vox/template.vox of the example pack).
 -- parts:  the objects in the file. covers: the parts whose lower layers need not be drawn under it.
--- layer:  1 = skin tight (replaces the body part), 2 = worn over (default 1).
+-- layer:  1 = skin tight (replaces the body part), 2 = worn over (default 1); a part is hidden under a worn item
+--         of a higher layer that covers it, so gear worn over everything (an air tank) takes layer 3.
+-- rigid:  true = the parts are not reshaped to the wearer's build (a steel tank, a helmet that must keep its shape):
+--         they move with the bone at the template part's place on that player, as painted.
 -- tint:   true = the file's objects are on a vox layer "$TINT" and palette 241-248 takes the wearer's skin colour.
 -- type:   a descriptive tag other mods read (inventory.clothing.<id>.type), "<clothing|armor>.<slot>.<kind>",
 --         e.g. "clothing.upper.jacket", "armor.head.greathelm"; made from the armor, slot and id when left out.
 -- armor:  0-1, the share of a hit the item blocks (pieces multiply); the Inventory mod gives it back on the host.
 -- mobility: added to the wearer's mobility factor (-0.10 = walks 10 % slower and jumps 10 % lower). noise: added to
---         the wearer's noise factor (0.35 = 35 % louder, -0.25 = quieter).
+--         the wearer's noise factor (0.35 = 35 % louder, -0.25 = quieter). swim: added to the wearer's swimming
+--         factor, which takes over from mobility in water (0.5 = swims 50 % faster: flippers; mobility -0.2 makes
+--         them slow on land).
 -- icon, drop: file names in your mod's folder (a 128 px png; a small .vox of the item lying in the world, in
 --         full-size 0.1 m voxels: a scaled-down vox makes a static body that hangs in the air). mod: your mod's id
 --         (found by itself when left out).
@@ -169,6 +175,7 @@ local function wbRegister()
 			if d.price then SetInt(k .. ".price", d.price) end        -- (what a store asks: -1 = not for sale; none = the store's own rule)
 			SetFloat(k .. ".mobility", d.mobility or 0)
 			SetFloat(k .. ".noise", d.noise or 0)
+			SetFloat(k .. ".swim", d.swim or 0)
 			-- the type tag other mods read: <clothing|armor>.<slot>.<kind>, e.g. armor.head.greathelm
 			SetString(k .. ".type", d.type or (((d.armor or 0) >= 0.1 and "armor." or "clothing.") .. (d.slot or "misc") .. "." .. id))
 			-- files for other mods (an inventory's icon, the model of the item lying in the world), relative to
@@ -477,7 +484,7 @@ local function wbBuild(p, st, list)
 					if sh then
 						st.shapes[#st.shapes + 1] = sh
 						st.names[#st.shapes] = id .. ":" .. part
-						local m = def.layer >= 1 and GetString("inventory.morph." .. p .. "." .. part) or ""
+						local m = def.layer >= 1 and not def.rigid and GetString("inventory.morph." .. p .. "." .. part) or ""
 						if m ~= "" then
 							wbJobs[#wbJobs + 1] = {shape = sh, key = id .. ":" .. part, m = m, wait = 2, tries = 0}
 						end

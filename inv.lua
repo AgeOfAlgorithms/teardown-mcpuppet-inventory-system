@@ -7,13 +7,17 @@
 --                                                        grid, the hotkeys and what is worn; missing ones ignored;
 --                                                        nothing dropped; read and cleared each tick, host)
 --   inventory.give.<player> = "id[:n[:ammo]] id ..."   hand items out (append to the string; read and cleared each
---                                                       tick; what does not fit lands at the player's feet)
+--                                                       tick; what does not fit lands at the player's feet; an id not
+--                                                       known yet is held up to 10 s, then dropped)
 --   inventory.items.<id>.name / .kind (tool | clothing | consumable | misc) / .stack / .slot / .armor / .icon
+--   inventory.items.<id>.swim                            clothing: added to the wearer's swimming speed factor (+0.5:
+--                                                        50 % faster in water; mobility counts only on land)
 --   inventory.items.<id>.mobility / .noise               clothing: added to the wearer's mobility (walking speed
 --                                                        and jump height) / noise as a share (-0.1 = 10 % less,
 --                                                        -0.3 = 30 % quieter)
 --   inventory.stat.<player>.immunity                     (host) defense / 5: a hit takes max(0, min(damage -
 --                                                        immunity, damage * (1 - defense))); elemental: no armour
+--   inventory.stat.<player>.swim                         (host) the swimming speed factor (1 = unchanged, 0.3..3)
 --   inventory.stat.<player>.defense / .mobility / .noise    (host, written here) what the player wears adds up to:
 --                                                        defense 0..1, mobility and noise as factors (1 = unchanged).
 --                                                        An enemy mod multiplies the noise it hears by .noise.
@@ -78,6 +82,12 @@
 --   inventory.shots.<p>.<tool>                          (host) rounds used from it so far (a counter)
 --   inventory.use.<p>.<tool> = n                        (host, a mod's own tool) n rounds / fuel used: taken off what is
 --                                                       loaded in it (add to it; read and cleared each tick)
+--   inventory.stow.<p> = "id id ..."                    (host) those tools are put away and can't be used while listed;
+--                                                       the items stay (grid, hotkeys); set and clear it on change (Dive:
+--                                                       guns under water)
+--   inventory.load.<p>.<tool> = n                       (host, a mod's own tool without .takes) n rounds / fuel added
+--                                                       to what is loaded in it, up to one item's own .ammo (a refill
+--                                                       rack; add to it; read and cleared each tick; never SetToolAmmo)
 --   inventory.cap.<p>.<tool> = n                        (host, a gun mod) at most n rounds fireable now: the game's
 --                                                       count; 0 while it reloads (magazines live in the gun's mod)
 --   inventory.dropgold = "x,y,z,n x,y,z,n ..."          (host) gold dropped into the world by another mod (a monster
@@ -281,7 +291,7 @@ function invScanDefs()
 					return "RAW:" .. root .. "/" .. f
 				end
 				local def = C.define({id = id, kind = "clothing", slot = slot,
-					armor = GetFloat(k .. ".armor"), mobility = GetFloat(k .. ".mobility"), noise = GetFloat(k .. ".noise"),
+					armor = GetFloat(k .. ".armor"), mobility = GetFloat(k .. ".mobility"), noise = GetFloat(k .. ".noise"), swim = GetFloat(k .. ".swim"),
 					icon = file("icon"), drop = file("drop"),
 					engine = true})                                       -- (the wear engine counts it by itself)
 				nameOf(def, k .. ".name")
@@ -299,7 +309,7 @@ function invScanDefs()
 			if slot ~= "" then C.addSlot(slot) end
 			local def = C.define({id = id, kind = kind ~= "" and kind or "misc",
 				stack = math.max(1, GetInt(k .. ".stack")), slot = slot ~= "" and slot or nil,
-				armor = GetFloat(k .. ".armor"), mobility = GetFloat(k .. ".mobility"), noise = GetFloat(k .. ".noise"),
+				armor = GetFloat(k .. ".armor"), mobility = GetFloat(k .. ".mobility"), noise = GetFloat(k .. ".noise"), swim = GetFloat(k .. ".swim"),
 				icon = modFile(GetString(k .. ".icon"), GetString(k .. ".mod")),
 				drop = modFile(GetString(k .. ".drop"), GetString(k .. ".mod")), heal = GetFloat(k .. ".heal"),
 				box = GetInt(k .. ".box") > 1 and GetInt(k .. ".box") or nil,
@@ -574,10 +584,13 @@ local function dropFrom(p, it, scatter)
 end
 
 -- "id[:n[:ammo]] id ..." from another mod
+-- (returns the words whose item is not known yet: a gift sent before its mod's definition was read)
 local function giveList(p, list)
+	local later = nil
 	for word in string.gmatch(list, "%S+") do
 		local id, n, ammo = string.match(word, "^([^:]+):?(%d*):?(%d*)$")
 		local def = id and C.defs[id]
+		if id and not def then later = (later and later .. " " or "") .. word end
 		if def then
 			n = tonumber(n) or 1
 			if def.takes then                                        -- (a gun: "gun:1:12" = 12 rounds loaded)
@@ -596,7 +609,10 @@ local function giveList(p, list)
 			end
 		end
 	end
+	return later
 end
+local GIVE_WAIT = 10     -- s a gift of an item not known yet is held for (its mod may define it a moment later)
+local giveLater = {}     -- player -> {list = words, untilT = time}
 
 -- The wheel shows the tools the hotkeys point at and nothing else. Ammo is ours: the instance's count is written
 -- into the game's, and what the game takes off it (a shot, a bomb placed) is taken off the instance. The sandbox
@@ -681,9 +697,23 @@ local function capTick(p, id, it, mine, joinerFree, shots, cap)
 	mine[id] = joinerFree and allow or write
 end
 
+-- inventory.stow.<p> = "id id ..." (host, a mod's: Dive while the head is under water): those tools are put away and
+-- out of the wheel, the items kept where they are (hotkeys too); back when the list no longer names them
+local stowStr, stowSet = {}, {}
+local function stowedOf(p)
+	local s = GetString("inventory.stow." .. p)
+	if stowStr[p] ~= s then
+		local set = {}
+		for id in string.gmatch(s, "%S+") do set[id] = true end
+		stowStr[p], stowSet[p] = s, set
+	end
+	return stowSet[p]
+end
+
 local function enforceTools(p, v, isAlive)
 	if invBlocked(p) then return end                                 -- (the wheel is the other mod's)
 	local wheel = isAlive and C.wheel(v) or {}
+	local stowed = stowedOf(p)
 	local mine = live[p]
 	local tools = ListKeys("game.tool")
 	local joinerFree = not IsPlayerLocal(p) and GetBool("level.unlimitedammo")   -- (a joiner under the sandbox)
@@ -696,6 +726,9 @@ local function enforceTools(p, v, isAlive)
 		local capK = "inventory.cap." .. p .. "." .. id
 		if invKeptTool(id) then
 			-- (inventory.keeptools: never enabled or disabled here)
+		elseif it and stowed[id] then                                -- (stowed: out of the wheel for now, the item kept;
+			mine[id] = nil                                           --  set up again from its own count when it is back)
+			if IsToolEnabled(id, p) then SetToolEnabled(id, false, p) end
 		elseif it and HasKey(capK) then
 			capTick(p, id, it, mine, joinerFree, shots, GetInt(capK))
 		elseif it then
@@ -749,13 +782,13 @@ local function enforceTools(p, v, isAlive)
 	-- a tool taken out of the wheel may still be the one in the hands: put it away
 	local held = GetPlayerTool(p)
 	-- (the game's sledge is no item but the sandbox still puts it in the hands at a respawn: run 2026-11-15, flag 9)
-	if held ~= "" and held ~= "none" and not wheel[held] and not invKeptTool(held) then
+	if held ~= "" and held ~= "none" and (not wheel[held] or stowed[held]) and not invKeptTool(held) then
 		SetPlayerTool("none", p)
 	end
 	-- a hotkey's tool (set for a few passes: the game's own number keys pick by tool group at the same time)
 	local w = want[p]
 	if w then
-		if w.id == "none" or wheel[w.id] then SetPlayerTool(w.id, p) end
+		if w.id == "none" or (wheel[w.id] and not stowed[w.id]) then SetPlayerTool(w.id, p) end
 		w.n = w.n - 1
 		if w.n <= 0 then want[p] = nil end
 	end
@@ -801,20 +834,24 @@ local function publishStats(p, v)
 		boostShown[p] = secs
 		SetInt("inventory.boost." .. p, secs, true)
 	end
-	local e = string.format("%.3f %.3f %.3f", own.defense, own.mobility + boost, own.noise)
+	local e = string.format("%.3f %.3f %.3f %.3f", own.defense, own.mobility + boost, own.noise, own.swim)
 	if invBlocked(p) then e = "blocked" end
 	if extras[p] ~= e then
 		extras[p] = e
-		if e == "blocked" then WardrobeExtra(p, 0, 0, 0) else WardrobeExtra(p, own.defense, own.mobility - 1 + boost, own.noise - 1) end
+		if e == "blocked" then WardrobeExtra(p, 0, 0, 0, 0) else WardrobeExtra(p, own.defense, own.mobility - 1 + boost, own.noise - 1, own.swim - 1) end
 	end
 	local d, m, n = WardrobeArmor(p), WardrobeMobility(p), WardrobeNoise(p)
-	local sig = string.format("%.3f %.3f %.3f", d, m, n)
+	-- swim: the factor of swimming speed (the user, 2026-11-21: flippers, faster in water, slower on land); the wear
+	-- engine applies it in water (WardrobeSwim), else what is worn adds up to here
+	local sw = invBlocked(p) and 1 or (WardrobeSwim and WardrobeSwim(p) or C.stats(v).swim)
+	local sig = string.format("%.3f %.3f %.3f %.3f", d, m, n, sw)
 	if stats[p] ~= sig then
 		stats[p] = sig
 		SetFloat("inventory.stat." .. p .. ".defense", d)
 		SetFloat("inventory.stat." .. p .. ".immunity", d * (WARDROBE_IMMUNITY or 0.2))   -- (a hit loses this first)
 		SetFloat("inventory.stat." .. p .. ".mobility", m)
 		SetFloat("inventory.stat." .. p .. ".noise", n)
+		SetFloat("inventory.stat." .. p .. ".swim", sw)
 	end
 end
 
@@ -1346,7 +1383,16 @@ function Inv.serverTick(dt)
 		if HasKey("inventory.give." .. p) then
 			local list = GetString("inventory.give." .. p)
 			ClearKey("inventory.give." .. p)
-			giveList(p, list)
+			local later = giveList(p, list)
+			if later then                                            -- (unknown ids: held, tried again each tick)
+				local g = giveLater[p]
+				giveLater[p] = {list = g and (g.list .. " " .. later) or later, untilT = GetTime() + GIVE_WAIT}
+			end
+		elseif giveLater[p] then
+			local g = giveLater[p]
+			giveLater[p] = nil
+			local later = giveList(p, g.list)
+			if later and GetTime() < g.untilT then giveLater[p] = {list = later, untilT = g.untilT} end
 		end
 		if HasKey("inventory.take." .. p) and InvKeep.claimed(p) then     -- a game mode takes back what it gave
 			local list = GetString("inventory.take." .. p)                --  (after their kept inventory came back)
@@ -1375,6 +1421,25 @@ function Inv.serverTick(dt)
 				it.ammo = it.ammo - took
 				countUsed(p, tid, took)
 				dirty = true
+			end
+		end
+		for _, tid in ipairs(ListKeys("inventory.load." .. p)) do         -- a mod refills its own tool (a spear rack: Dive)
+			local k = "inventory.load." .. p .. "." .. tid
+			local n = math.floor(GetFloat(k))
+			ClearKey(k)
+			local def = C.defs[tid]
+			local at = C.findTool(v, tid)
+			local it = at and C.get(v, at)
+			if it and def and not def.takes and n > 0 then
+				local full = def.pack or math.huge
+				local a = math.min(full, (it.ammo or 0) + n)
+				if a > (it.ammo or 0) then
+					it.ammo, dirty = a, true
+					if IsToolEnabled(tid, p) then                        -- (the game's count too, or enforceTools reads the
+						local free = not IsPlayerLocal(p) and GetBool("level.unlimitedammo")   --  gap as rounds used)
+						SetToolAmmo(tid, free and 9999 or a, p)
+					end
+				end
 			end
 		end
 		if HasKey("inventory.spend." .. p) and InvKeep.claimed(p) then     -- (a mod's purchases: all or nothing)
@@ -1535,7 +1600,7 @@ end
 ----- client -----
 
 local CELL, GAP = 76, 6
-local SLOT_NAMES = {head = "Head", top = "Upper body", legs = "Lower body", feet = "Feet"}
+local SLOT_NAMES = {head = "Head", top = "Upper body", back = "Back", legs = "Lower body", feet = "Feet"}
 
 -- a share as a signed whole percent, rounded half away from zero (-0.1 is "-10%": the stored float is a hair
 -- under, and flooring it from below read "-11%" in game). zeroSign: "+0%" rather than "0%".
@@ -1588,6 +1653,7 @@ local function tipLines(it, shop, ref)
 		if (def.mobility or 0) ~= 0 then out[#out + 1] = {"Mobility  " .. pctText(def.mobility), def.mobility > 0 and "good" or "bad"} any = true end
 		-- (louder is worse: creatures hear you)
 		if (def.noise or 0) ~= 0 then out[#out + 1] = {"Noise  " .. pctText(def.noise), def.noise < 0 and "good" or "bad"} any = true end
+		if (def.swim or 0) ~= 0 then out[#out + 1] = {"Swimming  " .. pctText(def.swim), def.swim > 0 and "good" or "bad"} any = true end
 		if not any then out[#out + 1] = {"No effect on your stats", "plain"} end
 	elseif def.kind == "tool" then
 		local wk = "inventory.weapons." .. it.id
@@ -2431,10 +2497,10 @@ local function invDrawMain()
 	local rows = math.ceil(C.GRID / cols)
 	local step = CELL + GAP
 	local nSlots = #C.SLOTS
-	local eRows = 4                                                  -- (slots: columns of four, head to feet)
+	local eRows = 5                                                  -- (slots: columns of five, head to feet - back since 2026-11-21)
 	local gridW, gridH = cols * step - GAP, rows * step - GAP
 	local PAD = 36
-	-- the player's panel: the slots (columns of four), the avatar window, the stats; the hotkeys along the bottom
+	-- the player's panel: the slots (columns of five), the avatar window, the stats; the hotkeys along the bottom
 	local slotCols = math.max(1, math.ceil(nSlots / eRows))
 	local avX, avW, avH = PAD + slotCols * step + 8, 300, gridH
 	local leftW = math.max(avX - PAD + avW + 20 + 150, C.HOTBAR * step - GAP - 60 - gridW)
@@ -2543,7 +2609,7 @@ local function invDrawMain()
 	end
 	-- what is worn adds up to, right of the avatar
 	local st = C.stats(mine)
-	local lines = {{"DEFENCE", math.floor(st.defense * 100 + 0.5) .. "%"}, {"IMMUNITY", tostring(math.floor(st.defense * 100 * (WARDROBE_IMMUNITY or 0.2) + 0.5))}, {"MOBILITY", pctText(st.mobility - 1, true)}, {"NOISE", pctText(st.noise - 1, true)}}
+	local lines = {{"DEFENCE", math.floor(st.defense * 100 + 0.5) .. "%"}, {"IMMUNITY", tostring(math.floor(st.defense * 100 * (WARDROBE_IMMUNITY or 0.2) + 0.5))}, {"MOBILITY", pctText(st.mobility - 1, true)}, {"NOISE", pctText(st.noise - 1, true)}, {"SWIMMING", pctText(st.swim - 1, true)}}
 	for i = 1, storeOpen and 0 or #lines do
 		UiPush()
 		UiTranslate(avX + avW + 20, top + (i - 1) * 96 + 8)

@@ -172,7 +172,9 @@ Tools need no drop model: the inventory uses the tool's own model.
 ## Giving items to players
 
 On the host, add to the string `inventory.give.<player>`. Each entry is `id`, `id:count`, or for a tool with ammo
-`id:1:ammo`. Entries are separated by spaces. What does not fit in the inventory lands at the player's feet.
+`id:1:ammo`. Entries are separated by spaces. What does not fit in the inventory lands at the player's feet. An id
+the inventory doesn't know yet (your mod defines it in the same moment) is held for up to 10 seconds and given as
+soon as the definition is read; after that it is dropped.
 
 ```lua
 function server.tick(dt)
@@ -300,9 +302,10 @@ What the fields mean to the player:
 
 | Field | Meaning |
 |---|---|
-| `slot` | Where it is worn: `"head"`, `"top"` (upper body), `"legs"` (lower body), `"feet"`. One item per slot. |
+| `slot` | Where it is worn: `"head"`, `"top"` (upper body), `"back"` (backpacks and other gear carried on the back), `"legs"` (lower body), `"feet"`. One item per slot. |
 | `armor` | Defence, 0 to 1: the share of a hit it blocks. Pieces multiply: two pieces of 0.5 block 0.75. With the immunity (total defence / 5), see [How armour works](#how-armour-works). |
-| `mobility` | Added to the wearer's walking speed and jump: `-0.10` = 10 % slower. |
+| `mobility` | Added to the wearer's walking speed and jump on land: `-0.10` = 10 % slower. It doesn't count in water. |
+| `swim` | Added to the wearer's swimming speed: `0.5` = 50 % faster in water (flippers). Optional, 0 by default. Since `mobility` counts only on land, give heavy armour a negative `swim` too, or it swims as fast as nothing worn (a guide per piece: plate -0.3 to -0.4, mail -0.2, leather -0.05 to -0.1). |
 | `noise` | Added to how loud the wearer moves: `0.35` = 35 % louder, `-0.25` = quieter. |
 | `price` | The store's price. `-1` = not sold. Left out: 150, plus 50 for every 5 % of armour. |
 | `icon`, `drop` | As in [The files](#the-files). |
@@ -360,6 +363,7 @@ Two host keys, for game modes (both read every tick, so set or clear them whenev
 | `inventory.healing` = false | No healing: a consumable that heals shows "No healing in this game mode" and is kept; other consumables (speed boosts) work. Missing or true: allowed. |
 | `inventory.scatter` = false | No gold lying around the map (the mod's option "Gold lying around the map", on by default: piles of 1-20 up to 300 in all, back 60 s after they are taken). The piles out are removed. Missing or true: the host's option decides. |
 | `inventory.nopunch.<player>` = true | That player can't punch with bare hands (a punch already winding up lands nowhere); armour, the HUD, items and gold stay as they are. Read every tick: set it while the player is down, clear it after. Missing or false: they punch. |
+| `inventory.stow.<player>` = "id id ..." | Those tools are put away and can't be used while the list names them (out of the wheel; a hotkey for one does nothing). The items stay where they are, hotkeys and loaded ammo included, and come back when the list no longer names them. Set and clear it on change, not every tick (Underwater Exploration: guns while the head is under water). |
 | `inventory.armored.<player>` = true | Set it in the tick your mode changes that player's health (`SetPlayerHealth`) by an amount you already took the armour off (`inventory.stat.<player>.defense`): the armour gives nothing back for that change. Cleared by the inventory. Without it, a health loss gets the armour's share back. |
 | `inventory.keeptools = "id id ..."` | Tool ids the inventory **never touches**: they are not items, and it never enables, disables or puts them away. Your mode hands them out (`SetToolEnabled`, `SetToolAmmo`) and takes them back itself, for everyone. |
 
@@ -414,6 +418,12 @@ it used to `inventory.use.<player>.<tool>` (a float, on the host). The inventory
 ammo and clears the key every tick; read `inventory.ammo.<player>.<tool>` to know when it is empty. The McPuppet
 Basic Tools Pack's blowtorch does this with its fuel.
 
+**Refilling a tool** (a rack or station that tops up rounds or fuel, e.g. a spear rack for a harpoon): add the
+rounds to `inventory.load.<player>.<tool>` (on the host). The inventory adds them to the tool that player carries, up
+to one item's own `inventory.tools.<tool>.ammo`, sets the game's count to match, and clears the key every tick. A
+player who doesn't carry the tool gets nothing. For tools without `.takes` (guns load ammo items instead). Never
+raise the count with `SetToolAmmo`: the inventory writes its own count back.
+
 ## How armour works
 
 A hit of `damage` (share of full health) takes `max(0, min(damage - immunity, damage * (1 - defense)))`: the
@@ -436,7 +446,8 @@ On the host, the inventory publishes what each player's worn items add up to:
 |---|---|
 | `inventory.stat.<player>.defense` | 0 to 1, the share of a hit blocked. |
 | `inventory.stat.<player>.immunity` | The defence / 5 (full plate, defence 0.73: 0.146): see [How armour works](#how-armour-works). |
-| `inventory.stat.<player>.mobility` | A factor, 1 = normal. |
+| `inventory.stat.<player>.mobility` | A factor, 1 = normal (on land). |
+| `inventory.stat.<player>.swim` | A factor, 1 = normal: the swimming speed. The inventory applies it at the surface (from the chest down in water); a diving mod multiplies its own under-water speed by it. |
 | `inventory.stat.<player>.noise` | A factor, 1 = normal. A creature mod multiplies the sound it hears from that player by it. |
 
 ### Melee hits on things that are not players

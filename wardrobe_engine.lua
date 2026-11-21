@@ -9,8 +9,8 @@
 --   client.init        InvWearClientInit()
 --   client.tick        InvWearClientTick(dt)          (it calls InventoryClientTick() itself)
 --   client.postUpdate  InvWearClientPostUpdate()      (the swinger's lean: bone work only takes effect from here)
--- and may call on the host: WardrobeArmor(p), WardrobeMobility(p), WardrobeNoise(p), WardrobeDamage(victim, d,
--- cause, attacker), WardrobeExtra(p, defense, mobility, noise), WeaponsSwing(p).
+-- and may call on the host: WardrobeArmor(p), WardrobeMobility(p), WardrobeNoise(p), WardrobeSwim(p),
+-- WardrobeDamage(victim, d, cause, attacker), WardrobeExtra(p, defense, mobility, noise, swim), WeaponsSwing(p).
 --
 -- A player whose host registry key inventory.wear.<playerId> is set (by the inventory, or by any other
 -- mod's server script: a game mode) is stripped to an underwear body - the character's own torso,
@@ -20,8 +20,8 @@
 --   ids                    the underwear body + those items (space separated; items come from inventory_api.lua, any mod)
 -- Armour: every item has an armor value (0-1, the share of a hit it blocks; pieces multiply). The host gives the
 -- blocked share of every health loss back (WardrobeArmor(p); shared.invWear.a<p>) - the one place armour is applied.
--- Slots (ids): head, top (upper body), legs (lower body), feet. Stats: defense (armor), mobility (walking speed and
--- jump height), noise: WardrobeArmor / WardrobeMobility / WardrobeNoise(p) on the host, shared.invWear.a / s / q<p>
+-- Slots (ids): head, top (upper body), back, legs (lower body), feet. Stats: defense (armor), mobility (walking speed
+-- and jump height, out of water), swim (in water, instead of mobility), noise: WardrobeArmor / WardrobeMobility / WardrobeNoise(p) on the host, shared.invWear.a / s / q<p>
 -- for clients. What the including script adds from elsewhere (an armour item of its own): WardrobeExtra.
 -- Characters with no skin (the skeleton, the robot, the space suit) keep their own body: only the parts an item
 -- covers are taken off.
@@ -72,13 +72,15 @@ end
 -- the three stats of what a player wears (the user's): defense (the share of a hit blocked, pieces multiply),
 -- mobility (walking speed and jump height, 1 = normal, the items' values added) and noise (how loud the player moves, 1 = normal,
 -- added likewise: for mods whose creatures listen - this mod only publishes it)
-local svSpeed, svNoise = {}, {}
+local svSpeed, svNoise, svSwim = {}, {}, {}
 local WALK_SPEED, JUMP_SPEED = 7.0, 4.0   -- the game's own (read in game by the Dive mod)
+local SWIM_DEPTH = 0.4           -- m of water over the point 0.2 m above the feet: swimming, not wading (the swim factor)
 
+-- (swim: the swimming factor, 1 = normal, the items' values added - in water it takes over from mobility: flippers)
 local function svStatsOf(w, x)
-	local pass, speed, noise = 1, 1, 1
+	local pass, speed, noise, swim = 1, 1, 1, 1
 	if x then
-		pass, speed, noise = 1 - math.max(0, math.min(x[1] or 0, 0.95)), 1 + (x[2] or 0), 1 + (x[3] or 0)
+		pass, speed, noise, swim = 1 - math.max(0, math.min(x[1] or 0, 0.95)), 1 + (x[2] or 0), 1 + (x[3] or 0), 1 + (x[4] or 0)
 	end
 	for id in string.gmatch(w, "%S+") do
 		local k = "inventory.clothing." .. id
@@ -86,13 +88,15 @@ local function svStatsOf(w, x)
 		if a > 0 then pass = pass * (1 - math.min(a, 0.95)) end
 		speed = speed + GetFloat(k .. ".mobility")
 		noise = noise + GetFloat(k .. ".noise")
+		swim = swim + GetFloat(k .. ".swim")
 	end
-	return 1 - pass, math.max(0.5, math.min(1.5, speed)), math.max(0.1, math.min(3, noise))
+	return 1 - pass, math.max(0.5, math.min(1.5, speed)), math.max(0.1, math.min(3, noise)), math.max(0.3, math.min(3, swim))
 end
 
 -- the mobility factor and the noise factor of what this player wears (host)
 function WardrobeMobility(p) return svSpeed[p] or 1 end
 function WardrobeNoise(p) return svNoise[p] or 1 end
+function WardrobeSwim(p) return svSwim[p] or 1 end
 
 -- the share of a hit this player's clothes block (host)
 function WardrobeArmor(p)
@@ -100,12 +104,13 @@ function WardrobeArmor(p)
 end
 
 -- (host) what the including script adds to a player's totals from things that are not clothes: a share of a hit
--- blocked (multiplies with the clothes'), and amounts added to the mobility and noise factors. nil / zeros: nothing.
-function WardrobeExtra(p, defense, mobility, noise)
+-- blocked (multiplies with the clothes'), and amounts added to the mobility, noise and swim factors. nil / zeros:
+-- nothing.
+function WardrobeExtra(p, defense, mobility, noise, swim)
 	local x = svExtra[p]
-	local d, m, n = defense or 0, mobility or 0, noise or 0
-	if x and x[1] == d and x[2] == m and x[3] == n then return end
-	svExtra[p] = (d ~= 0 or m ~= 0 or n ~= 0) and {d, m, n} or nil
+	local d, m, n, s = defense or 0, mobility or 0, noise or 0, swim or 0
+	if x and x[1] == d and x[2] == m and x[3] == n and x[4] == s then return end
+	svExtra[p] = (d ~= 0 or m ~= 0 or n ~= 0 or s ~= 0) and {d, m, n, s} or nil
 	svWear[p] = nil                                               -- (the totals are worked out again in the next tick)
 end
 
@@ -175,12 +180,20 @@ function InvWearServerTick(dt)
 		now[p] = w
 		if svWear[p] ~= w then
 			changed = true
-			svArmor[p], svSpeed[p], svNoise[p] = svStatsOf(w, svExtra[p])
+			svArmor[p], svSpeed[p], svNoise[p], svSwim[p] = svStatsOf(w, svExtra[p])
 		end
 		-- mobility: walking speed and jump speed are one-frame values, set every tick - only for players whose
 		-- clothes change them. The height of a
 		-- jump goes with the square of the jump speed: the root, so the HEIGHT follows the factor.
-		if svSpeed[p] and svSpeed[p] ~= 1 then
+		-- In water the swimming factor takes over: the game's swimming follows walkingSpeed (~0.4 of it, seen by Dive), and
+		-- mobility no longer applies (plate doesn't slow a swimmer). "In water" as the game's own swim pose has it
+		-- (toolanimation.lua getSwimming: the point 0.2 m above the feet) - feet + 0.8 m missed a swimmer floating at the
+		-- surface (Dive's flipper test, 2026-11-21) - and at least SWIM_DEPTH under the surface there, so wading stays walking.
+		local feet = GetPlayerTransform(p).pos
+		local wet, depth = IsPointInWater(Vec(feet[1], feet[2] + 0.2, feet[3]))
+		if wet and (depth or 0) >= SWIM_DEPTH then
+			if svSwim[p] and svSwim[p] ~= 1 then SetPlayerParam("walkingSpeed", WALK_SPEED * svSwim[p], p) end
+		elseif svSpeed[p] and svSpeed[p] ~= 1 then
 			SetPlayerParam("walkingSpeed", WALK_SPEED * svSpeed[p], p)
 			SetPlayerParam("jumpSpeed", JUMP_SPEED * math.sqrt(svSpeed[p]), p)
 		end
@@ -201,7 +214,7 @@ function InvWearServerTick(dt)
 	for p in pairs(svWear) do
 		if now[p] == nil then
 			changed = true
-			svArmor[p], svHealth[p], svSpeed[p], svNoise[p], svExtra[p] = nil, nil, nil, nil, nil
+			svArmor[p], svHealth[p], svSpeed[p], svNoise[p], svExtra[p], svSwim[p] = nil, nil, nil, nil, nil, nil
 			svImm[p], svImmT[p] = nil, nil
 		end
 	end

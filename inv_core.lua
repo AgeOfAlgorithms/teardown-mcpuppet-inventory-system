@@ -13,7 +13,8 @@ local C = InvCore
 C.GRID = 42                                                  -- 7 x 6
 C.COLS = 7
 C.HOTBAR = 9                                                 -- hotkey slots 1-9: the tools they point at are the game's wheel
-C.SLOTS = {"head", "top", "legs", "feet"}                    -- head, upper body, lower body, feet; addSlot for a mod's own
+C.SLOTS = {"head", "top", "back", "legs", "feet"}            -- head, upper body, back (backpacks and other back-carried
+                                                             -- gear: the user, 2026-11-21), lower body, feet; addSlot for a mod's own
 C.defs = {}
 
 -- an equipment slot a clothing mod brings (Wardrobe's slots are free strings)
@@ -27,7 +28,8 @@ end
 -- def: {id, kind = "tool" | "clothing" | "consumable" | "misc", name, stack = max per cell (1), slot = equipment
 -- slot (clothing), tool = the game's tool id (tools), and what clothing does to its wearer:
 -- armor = 0..1, the share of a hit it blocks (defence); mobility = added to the walking speed and jump height as a share (-0.1: 10 %
--- slower); noise = added to the noise the wearer makes as a share (-0.3: 30 % quieter, 0.2: 20 % louder)}
+-- slower); noise = added to the noise the wearer makes as a share (-0.3: 30 % quieter, 0.2: 20 % louder); swim = added
+-- to the swimming speed as a share (+0.5: flippers, 50 % faster in water)}
 function C.define(def)
 	def.stack = def.stack or 1
 	def.kind = def.kind or "misc"
@@ -316,18 +318,21 @@ function C.armor(inv, own)
 end
 
 -- What is worn does to its wearer: {defense = 0..1 (C.armor), mobility = the factor of walking speed and jump height (0.3..2),
--- noise = the factor of the noise made (0..3)}. own = true: without the clothing packs' pieces (def.engine).
+-- noise = the factor of the noise made (0..3), swim = the factor of swimming speed (0.3..3)}. own = true: without the
+-- clothing packs' pieces (def.engine).
 function C.stats(inv, own)
-	local mobility, noise = 1, 1
+	local mobility, noise, swim = 1, 1, 1
 	for i = 1, #C.SLOTS do
 		local it = inv.e[C.SLOTS[i]]
 		local def = it and C.defs[it.id]
 		if def and not (own and def.engine) then
 			mobility = mobility + (def.mobility or 0)
 			noise = noise + (def.noise or 0)
+			swim = swim + (def.swim or 0)
 		end
 	end
-	return {defense = C.armor(inv, own), mobility = math.max(0.3, math.min(2, mobility)), noise = math.max(0, math.min(3, noise))}
+	return {defense = C.armor(inv, own), mobility = math.max(0.3, math.min(2, mobility)), noise = math.max(0, math.min(3, noise)),
+		swim = math.max(0.3, math.min(3, swim))}
 end
 
 -- game tool id -> the instance, for the tools the hotkeys point at (the ones the wheel shows)
