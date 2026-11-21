@@ -13,6 +13,7 @@
 #include "inv_color.lua"
 #include "inv_keep.lua"
 #include "inv_scatter.lua"
+#include "inv_sandbox.lua"
 
 -- (test builds add their modules here)
 

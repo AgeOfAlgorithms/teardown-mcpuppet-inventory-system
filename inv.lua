@@ -889,11 +889,11 @@ local function publishStock()
 end
 
 -- the gold a new wallet starts with: inventory.startgold (host, a game mode's), else the mod's option
--- (savegame.mod.startgold, at most 2000 - the user, 2026-11-15: "make the starting money configurable? up to 2000
--- max"), else INV_GOLD_START (500)
+-- (savegame.mod.startgold, at most 9999 - the user, 2026-11-15: "make the starting money configurable? up to 2000
+-- max"; 2026-11-20: an option to start with 9999), else INV_GOLD_START (500)
 function invStartGold()
 	if HasKey("inventory.startgold") then return math.max(0, GetInt("inventory.startgold")) end
-	if HasKey("savegame.mod.startgold") then return math.max(0, math.min(2000, GetInt("savegame.mod.startgold"))) end
+	if HasKey("savegame.mod.startgold") then return math.max(0, math.min(9999, GetInt("savegame.mod.startgold"))) end
 	return INV_GOLD_START
 end
 
@@ -1304,6 +1304,7 @@ function Inv.serverEnforce()
 end
 
 function Inv.serverTick(dt)
+	InvSandbox.serverTick(dt)                                        -- (multiplayer sandbox: its tool loop off, inv_sandbox.lua)
 	presentT = presentT - dt
 	if presentT <= 0 then                                            -- (other mods: is the Inventory running?)
 		presentT = 1

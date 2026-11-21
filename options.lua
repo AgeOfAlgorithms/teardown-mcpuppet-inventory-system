@@ -58,8 +58,8 @@ local function left()
 	-- the gold a player drops where they die (savegame.mod.deathloss, percent; 20 when unset - the user, 2026-11-15)
 	intRow("Gold dropped at death", "savegame.mod.deathloss", {0, 10, 20, 30, 50, 100}, 20,
 		function(v) return v .. "%" end, "That share of a player's gold falls where they die, for anyone to pick up.")
-	-- the gold a new wallet starts with (savegame.mod.startgold; 500 when unset, at most 2000 - the user, 2026-11-15)
-	intRow("Starting gold", "savegame.mod.startgold", {100, 250, 500, 1000, 2000}, 500, tostring,
+	-- the gold a new wallet starts with (savegame.mod.startgold; 500 when unset, at most 2000 - the user, 2026-11-15; 9999 added 2026-11-20)
+	intRow("Starting gold", "savegame.mod.startgold", {100, 250, 500, 1000, 2000, 9999}, 500, tostring,
 		"For new wallets. Kept wallets keep their gold: NEW SESSION gives everyone this amount.", 130)
 end
 
