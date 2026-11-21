@@ -32,6 +32,8 @@
 --                                                        (inv_color.lua)
 --   (the guide for other mods: MODDING.md)
 --   inventory.punch = 0 / .power / .delay / .cooldown / .reach   (host) the bare-hands punch: off / retuned
+--   inventory.nopunch.<player> = true                    (host) that player can't punch (a punch under way lands
+--                                                        nowhere); everything else stays (Brawl: downed players)
 --   inventory.gold.<player> = n                          (host, synced) that player's gold coins, the store's money:
 --                                                        any mod may add to it (a reward) or take from it; read it
 --                                                        back each time, never keep a copy. Every player starts
@@ -1108,7 +1110,8 @@ end
 -- and when the wind-up has passed works the hit out from its own view of the player: the nearest other player on
 -- the aim line, else the world on the aim ray (a dent in soft things, a push on loose ones). Damage is
 -- the wear engine's WardrobeDamage: the victim's armour is taken off first. Clients only show it.
--- Host keys: inventory.punch = 0 switches it off; inventory.punch.power / .delay / .cooldown / .reach retune it.
+-- Host keys: inventory.punch = 0 switches it off; inventory.punch.power / .delay / .cooldown / .reach retune it;
+-- inventory.nopunch.<player> = true: that player only (Brawl's downed players, 2026-11-20).
 local PUNCH = {power = 0.10, delay = 0.16, cooldown = 0.30, reach = 1.5, width = 0.35, knock = 2.5, hole = 0.12, glass = 0.35, push = 40}
 local PUNCH_BODY = 0.35  -- m: a player's body round its upright axis
 local FX_FLESH, FX_WOOD, FX_METAL, FX_STONE, FX_GLASS = 1, 2, 3, 4, 5
@@ -1256,11 +1259,12 @@ end
 
 local function punchTick(p, isAlive)
 	local now = GetTime()
-	if punchAt[p] and now >= punchAt[p] then
-		punchAt[p] = nil
-		if isAlive and emptyHanded(p) then punchLand(p) end
+	local barred = GetBool("inventory.nopunch." .. p)                -- (a game mode's: this player can't punch now -
+	if punchAt[p] and now >= punchAt[p] then                         --  Brawl's downed players; a punch under way lands
+		punchAt[p] = nil                                             --  nowhere)
+		if isAlive and not barred and emptyHanded(p) then punchLand(p) end
 	end
-	if isAlive and not punchAt[p] and now >= (punchReady[p] or 0) and emptyHanded(p) and not screenOpen[p]
+	if isAlive and not barred and not punchAt[p] and now >= (punchReady[p] or 0) and emptyHanded(p) and not screenOpen[p]
 		and not (HasKey("inventory.punch") and GetInt("inventory.punch") == 0)
 		and GetPlayerVehicle(p) == 0 and GetPlayerGrabBody(p) == 0
 		and (InputDown("usetool", p) or GetBool("inventory.test.usetool")) then   -- (the key: autotests, as invPressed)
