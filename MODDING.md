@@ -176,6 +176,11 @@ On the host, add to the string `inventory.give.<player>`. Each entry is `id`, `i
 the inventory doesn't know yet (your mod defines it in the same moment) is held for up to 10 seconds and given as
 soon as the definition is read; after that it is dropped.
 
+**Default items** (one of your items everyone starts with): wait until `inventory.ready.<player>` is true (host). From
+then on that player's kept inventory is back and `inventory.count.<player>.<id>` is written, so give only when the count
+is 0. A player holds at most one of each tool: a tool they already have is not added again (only its ammo, if the
+entry has some, goes onto the one they carry), and a picked-up copy of it is used up the same way.
+
 ```lua
 function server.tick(dt)
     -- (once per player, when you decide to)

@@ -6,6 +6,8 @@
 --   inventory.take.<player> = "id[:n] id ..."           take items back (n: how many, none: all of them; from the
 --                                                        grid, the hotkeys and what is worn; missing ones ignored;
 --                                                        nothing dropped; read and cleared each tick, host)
+--   inventory.ready.<player> = true                     (host) that player's kept inventory is back and
+--                                                       inventory.count.<player>.* is written: give default items after
 --   inventory.give.<player> = "id[:n[:ammo]] id ..."   hand items out (append to the string; read and cleared each
 --                                                       tick; what does not fit lands at the player's feet; an id not
 --                                                       known yet is held up to 10 s, then dropped)
@@ -613,6 +615,7 @@ local function giveList(p, list)
 end
 local GIVE_WAIT = 10     -- s a gift of an item not known yet is held for (its mod may define it a moment later)
 local giveLater = {}     -- player -> {list = words, untilT = time}
+local ready = {}         -- player -> inventory.ready.<p> written (the kept inventory back, the counts published)
 
 -- The wheel shows the tools the hotkeys point at and nothing else. Ammo is ours: the instance's count is written
 -- into the game's, and what the game takes off it (a shot, a bomb placed) is taken off the instance. The sandbox
@@ -1318,6 +1321,7 @@ function Inv.serverInit()
 	end
 	--                      -- (TEST builds: the host's test drives the server)
 	ClearKey("inventory.count")
+	ClearKey("inventory.ready")
 	ClearKey("inventory.give")
 	ClearKey("inventory.used")
 	ClearKey("inventory.stat")
@@ -1493,6 +1497,8 @@ function Inv.serverTick(dt)
 			ClearKey("inventory.wear." .. p)
 			ClearKey("inventory.count." .. p)
 			counts[p] = nil
+			ready[p] = nil
+			ClearKey("inventory.ready." .. p)
 			dirty = true
 		end
 	end
@@ -1508,6 +1514,10 @@ function Inv.serverTick(dt)
 			out.p["p" .. p] = C.copy(v)
 			out.p["p" .. p].money = money[p] or nil
 			publishCounts(p, v)
+			if InvKeep.claimed(p) and not ready[p] then              -- (other mods: the kept inventory is back and counted)
+				ready[p] = true
+				SetBool("inventory.ready." .. p, true)
+			end
 		end
 		shared.inv = out
 	end
@@ -1516,6 +1526,7 @@ end
 function Inv.serverDestroy()
 	for p in pairs(invs) do ClearKey("inventory.wear." .. p) end
 	ClearKey("inventory.count")
+	ClearKey("inventory.ready")
 end
 
 -- A client's requests: its player id, its key (see the top), then what it asks. A place is a ref of inv_core.lua.
